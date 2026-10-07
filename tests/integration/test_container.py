@@ -308,8 +308,9 @@ def test_old_protocols_refused(setup: dict[str, Any]) -> None:
 
 
 def test_alternate_data_streams(setup: dict[str, Any]) -> None:
-    """macOS metadata: on ext4 named streams work (fruit + streams_xattr); on exFAT (no
-    xattrs) generic streams are unsupported but the resource fork works (stored as a file)."""
+    """macOS metadata: on ext4 named streams work (fruit + streams_xattr). On exFAT (no
+    xattrs) no stream module is loaded, so streams are cleanly unsupported and macOS uses
+    ._ AppleDouble files instead."""
     from smbprotocol.connection import Connection
     from smbprotocol.exceptions import SMBResponseException
     from smbprotocol.open import (
@@ -350,9 +351,9 @@ def test_alternate_data_streams(setup: dict[str, Any]) -> None:
         tree = TreeConnect(sess, r"\\127.0.0.1\S1")
         tree.connect()
         assert write_read(tree, "streamtest.txt")
-        assert write_read(tree, "streamtest.txt:AFP_Resource")
-        generic = write_read(tree, "streamtest.txt:userstream")
-        assert generic is (FS != "exfat"), f"generic named stream on {FS}: {generic}"
+        for stream in ("streamtest.txt:AFP_Resource", "streamtest.txt:userstream"):
+            ok = write_read(tree, stream)
+            assert ok is (FS != "exfat"), f"{stream} on {FS}: {ok}"
     finally:
         conn.disconnect()
 
