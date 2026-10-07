@@ -1,0 +1,34 @@
+# On every push to main: the full suite, then push the exact tested image to GHCR as
+# latest, YYYYMMDD and sha-<short>. Nothing is pushed unless every check is green.
+# Note: merges done by GITHUB_TOKEN (Dependabot auto-merge) do not trigger this workflow;
+# the weekly rebuild publishes those within 7 days.
+name: publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  test:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-test.yml
+
+  push:
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/push-image.yml
+    with:
+      date_tag: ${{ needs.test.outputs.date_tag }}
+      short_sha: ${{ needs.test.outputs.short_sha }}
