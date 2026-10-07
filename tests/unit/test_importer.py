@@ -86,21 +86,21 @@ def by_name(shares: list[importer.ImportedShare]) -> dict[str, importer.Imported
 
 
 def test_parse_follows_include_only_inside_import(imp: Path, env: Env) -> None:
-    shares = importer.parse_import(env.settings.import_dir)
+    shares = importer.parse_import(env.settings.import_dir, env.settings.volumes)
     names = set(by_name(shares))
     assert names == {"Files", "Isherveer", "Jagdev", "Bad]Name", "Sandip", "Weird"}
     assert "printers" not in names and "homes" not in names
 
 
 def test_guest_share_flagged_was_anonymous(imp: Path, env: Env) -> None:
-    s = by_name(importer.parse_import(env.settings.import_dir))["Files"]
+    s = by_name(importer.parse_import(env.settings.import_dir, env.settings.volumes))["Files"]
     assert s.was_anonymous
     assert s.all_users == "rw"
     assert s.members == {}
 
 
 def test_member_mapping(imp: Path, env: Env) -> None:
-    shares = by_name(importer.parse_import(env.settings.import_dir))
+    shares = by_name(importer.parse_import(env.settings.import_dir, env.settings.volumes))
     assert shares["Isherveer"].members == {"isherveer": "rw"}
     assert shares["Isherveer"].all_users is None
     j = shares["Jagdev"]
@@ -109,7 +109,7 @@ def test_member_mapping(imp: Path, env: Env) -> None:
 
 
 def test_problems_block_import(imp: Path, env: Env) -> None:
-    shares = by_name(importer.parse_import(env.settings.import_dir))
+    shares = by_name(importer.parse_import(env.settings.import_dir, env.settings.volumes))
     assert shares["Bad]Name"].problems
     assert any("volume" in p for p in shares["Sandip"].problems)
     assert shares["Weird"].problems  # % in comment is refused, not escaped
@@ -119,13 +119,13 @@ def test_problems_block_import(imp: Path, env: Env) -> None:
 def test_parse_never_writes(imp: Path, env: Env) -> None:
     before = {p: p.read_bytes() for p in imp.iterdir()}
     mtimes = {p: p.stat().st_mtime_ns for p in imp.iterdir()}
-    importer.parse_import(env.settings.import_dir)
+    importer.parse_import(env.settings.import_dir, env.settings.volumes)
     assert {p: p.read_bytes() for p in imp.iterdir()} == before
     assert {p: p.stat().st_mtime_ns for p in imp.iterdir()} == mtimes
 
 
 def test_missing_import_dir_is_empty(env: Env) -> None:
-    assert importer.parse_import(str(env.tmp / "nope")) == []
+    assert importer.parse_import(str(env.tmp / "nope"), env.settings.volumes) == []
 
 
 # --- routes -----------------------------------------------------------------------------

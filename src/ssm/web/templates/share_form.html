@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit share" if spec else "New share" }}{% endblock %}
+{% block content %}
+{% set f = form or {} %}
+<h1>{{ ("Edit share " ~ spec.name) if spec else "New share" }}</h1>
+<form method="post" action="{{ ('/shares/' ~ (spec.name | urlencode)) if spec else '/shares' }}" class="card">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Share name
+    <input name="name" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9 ._\-]{0,63}"
+           value="{{ f.get('name', spec.name if spec else '') }}">
+    <small>Letters, digits, space, dot, underscore, dash. This is the name clients see.</small>
+  </label>
+  <label>Folder
+    <input name="path" required value="{{ f.get('path', path) }}">
+    <small>Must be an existing folder inside a configured volume.
+      <a href="/browse{% if path %}?path={{ path | urlencode }}{% endif %}">Browse folders</a></small>
+  </label>
+  {% if no_unix %}
+  <p class="banner warn">This folder is on a <strong>{{ fs }}</strong> filesystem, which has no unix
+    permissions. Access is enforced by Samba at share level only: anyone who can reach the files
+    another way (for example through another share or container on the same disk) is not
+    restricted by these settings, and per-folder permissions cannot be set.</p>
+  {% endif %}
+  <label>Comment (optional)
+    <input name="comment" maxlength="256" value="{{ f.get('comment', spec.comment if spec else '') }}">
+  </label>
+
+  <fieldset>
+    <legend>Members</legend>
+    {% if not users %}<p class="muted">No SMB users yet. <a href="/users">Create one first.</a></p>{% endif %}
+    {% for u in users %}
+    {% set cur = f.get('access_' ~ u, (spec.members.get(u, 'none') if spec else 'none')) %}
+    <div class="member">
+      <span>{{ u }}</span>
+      <label class="radio"><input type="radio" name="access_{{ u }}" value="none" {% if cur == 'none' %}checked{% endif %}> no access</label>
+      <label class="radio"><input type="radio" name="access_{{ u }}" value="ro" {% if cur == 'ro' %}checked{% endif %}> read only</label>
+      <label class="radio"><input type="radio" name="access_{{ u }}" value="rw" {% if cur == 'rw' %}checked{% endif %}> read/write</label>
+    </div>
+    {% endfor %}
+  </fieldset>
+
+  <fieldset>
+    <legend>All users of this server</legend>
+    {% set au = f.get('all_users', (spec.all_users or 'off') if spec else 'off') %}
+    <label class="radio"><input type="radio" name="all_users" value="off" {% if au == 'off' %}checked{% endif %}> off (only the members above)</label>
+    <label class="radio"><input type="radio" name="all_users" value="ro" {% if au == 'ro' %}checked{% endif %}> every SMB user of this server, read only</label>
+    <label class="radio"><input type="radio" name="all_users" value="rw" {% if au == 'rw' %}checked{% endif %}> every SMB user of this server, read/write</label>
+    <small>This is not anonymous guest access. Logging in is still required: anonymous access is
+      switched off server-wide, so a device that used to connect without a password needs an
+      SMB user account.</small>
+  </fieldset>
+
+  <button type="submit">{{ "Save" if spec else "Create share" }}</button>
+</form>
+
+{% if spec %}
+<section class="card">
+  <h2>Folder permissions</h2>
+  {% if spec.no_unix_perms %}
+  <p>This folder is on a filesystem without unix permissions; ownership and mode come from the
+    mount options on the host (see the README). Nothing to change here.</p>
+  {% elif perm_error %}
+  <p class="banner error">{{ perm_error }}</p>
+  {% elif perm and perm.changes %}
+  <p>SMB users can only write here if the folder belongs to the <code>smbusers</code> group and is
+    group-writable. These changes would be made to <code>{{ spec.path }}</code> itself only
+    (not to anything inside it):</p>
+  <ul>{% for c in perm.changes %}<li>{{ c }}</li>{% endfor %}</ul>
+  <form method="post" action="/shares/{{ spec.name | urlencode }}/permissions">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="before_uid" value="{{ perm.before.uid }}">
+    <input type="hidden" name="before_gid" value="{{ perm.before.gid }}">
+    <input type="hidden" name="before_mode" value="{{ perm.before.mode }}">
+    <label class="radio"><input type="checkbox" name="fix_permissions" value="yes"> fix permissions as listed above</label>
+    <button type="submit">Apply</button>
+  </form>
+  {% else %}
+  <p>Permissions look right; nothing to change.</p>
+  {% endif %}
+</section>
+
+<section class="card danger">
+  <h2>Remove share</h2>
+  <p>Stops sharing the folder and disconnects clients. The folder and its files are not touched.</p>
+  <form method="post" action="/shares/{{ spec.name | urlencode }}/delete" hx-confirm="Stop sharing {{ spec.name }}?">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit" class="danger">Remove share</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

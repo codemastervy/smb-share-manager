@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"selfRequestsOnly":true,"historyCacheSize":0}'>
+<meta name="csrf-token" content="{{ csrf }}">
+<title>{% block title %}SMB shares{% endblock %} · smb-share-manager</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body{% if logged_in %} hx-boost="true" hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'{% endif %}>
+<header>
+  <span class="brand">smb-share-manager</span>
+  {% if logged_in %}
+  <nav>
+    <a href="/shares">Shares</a>
+    <a href="/users">SMB users</a>
+    <a href="/browse">Folders</a>
+    <a href="/config">Config &amp; status</a>
+    <a href="/import">Import</a>
+    <form method="post" action="/logout" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button type="submit" class="link">Log out</button>
+    </form>
+  </nav>
+  {% endif %}
+</header>
+<main>
+  {% if import_mounted %}
+  <p class="banner warn">Import data (contains password hashes) is still mounted at /import.
+    When you have finished importing, remove the /import line from docker-compose.yml,
+    delete ./import on the server and run docker compose up -d.</p>
+  {% endif %}
+  {% if msg %}<p class="banner ok">{{ msg }}</p>{% endif %}
+  {% if err %}<p class="banner error">{{ err }}</p>{% endif %}
+  {% if error %}<p class="banner error">{{ error }}</p>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer>smb-share-manager {{ version }} · built {{ build_date }}</footer>
+</body>
+</html>

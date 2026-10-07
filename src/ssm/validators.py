@@ -60,7 +60,7 @@ DENIED_VOLUMES = (
     "/lib64",
     "/var",
     "/root",
-    "/tmp",  # noqa: S108 - a denylist entry, not a temp file
+    "/tmp",  # noqa: S108  # nosec B108
     "/home",
 )
 DENIED_VOLUME_TREES = ("/proc", "/sys", "/dev", "/etc", "/data", "/run", "/usr", "/boot")

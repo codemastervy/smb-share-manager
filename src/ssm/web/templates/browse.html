@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Folders{% endblock %}
+{% block content %}
+<h1>Folders</h1>
+{% if not path %}
+<ul>{% for vol in volumes %}<li><a href="/browse?path={{ vol | urlencode }}">{{ vol }}</a></li>{% endfor %}</ul>
+{% else %}
+<p class="crumbs">{% for label, p in crumbs %}<a href="/browse?path={{ p | urlencode }}">{{ label }}</a>{% if not loop.last %} / {% endif %}{% endfor %}
+  <span class="tag">{{ fs }}</span></p>
+<p>
+  {% if path in shared %}Shared as <a href="/shares/{{ shared[path] | urlencode }}/edit">{{ shared[path] }}</a>
+  {% else %}<a class="button" href="/shares/new?path={{ path | urlencode }}">Share this folder</a>{% endif %}
+  {% if parent %} · <a href="/browse?path={{ parent | urlencode }}">Up</a>{% endif %}
+</p>
+
+<table>
+  <thead><tr><th>Name</th><th>Size</th><th>Rename</th><th>Delete</th></tr></thead>
+  <tbody>
+  {% for e in entries %}
+  {% set full = path.rstrip('/') ~ '/' ~ e.name %}
+  <tr>
+    <td>
+      {% if e.kind == "dir" %}<a href="/browse?path={{ full | urlencode }}">{{ e.name }}/</a>
+        {% if full in shared %}<span class="tag">shared as {{ shared[full] }}</span>{% endif %}
+      {% elif e.kind == "file" %}<a href="/browse/download?path={{ full | urlencode }}" download hx-boost="false">{{ e.name }}</a>
+      {% elif e.kind == "link" %}{{ e.name }} <span class="tag">symbolic link, not followed</span>
+      {% else %}{{ e.name }} <span class="tag">special file</span>{% endif %}
+    </td>
+    <td>{% if e.kind == "file" %}{{ e.size | filesizeformat }}{% endif %}</td>
+    <td>
+      <form method="post" action="/browse/rename" class="row">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="path" value="{{ full }}">
+        <input name="new_name" required value="{{ e.name }}">
+        <button type="submit">Rename</button>
+      </form>
+    </td>
+    <td>
+      <form method="post" action="/browse/delete" class="row">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="path" value="{{ full }}">
+        <input name="confirm" required placeholder="type the name to confirm" autocomplete="off">
+        {% if e.kind == "dir" %}<label class="radio"><input type="checkbox" name="recursive" value="yes"> with contents</label>{% endif %}
+        <button type="submit" class="danger">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">Empty folder.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="card row">
+  <form method="post" action="/browse/mkdir" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="path" value="{{ path }}">
+    <input name="name" required placeholder="new folder name">
+    <button type="submit">Create folder</button>
+  </form>
+  <form class="row upload" data-dir="{{ path }}" data-max-mb="{{ max_upload_mb }}">
+    <input type="file" name="file" required multiple>
+    <button type="submit">Upload</button>
+    <small class="upload-status">Max {{ max_upload_mb }} MB per file. Existing files are never replaced.</small>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

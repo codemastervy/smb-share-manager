@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import sqlite3
 from pathlib import Path
@@ -103,7 +104,9 @@ def test_wrong_password_rejected(env: Env) -> None:
     c = env.make_client()
     token = csrf_from(c.get("/login").text)
     r = c.post(
-        "/login", data={"password": "wrong password!!", "csrf_token": token}, headers={"Origin": ORIGIN}
+        "/login",
+        data={"password": "wrong password!!", "csrf_token": token},
+        headers={"Origin": ORIGIN},
     )
     assert r.status_code == 401
     assert "ssm_session" not in r.cookies
@@ -130,7 +133,9 @@ def test_login_cross_origin_rejected(env: Env) -> None:
 def test_session_cookie_flags_http(env: Env) -> None:
     c = env.make_client()
     token = csrf_from(c.get("/login").text)
-    r = c.post("/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN})
+    r = c.post(
+        "/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN}
+    )
     sc = r.headers["set-cookie"]
     assert "ssm_session=" in sc
     assert "HttpOnly" in sc
@@ -140,9 +145,11 @@ def test_session_cookie_flags_http(env: Env) -> None:
 
 
 def test_session_cookie_secure_when_forced(env: Env) -> None:
+    # Behind a TLS-terminating proxy that is not in TRUSTED_PROXIES the app sees http, so
+    # COOKIE_SECURE=true must force the flag. (httpx then refuses to send the cookie back
+    # over http, so only the Set-Cookie header is checked here.)
     c = env.make_client(make_settings(env.tmp, env.volume, cookie_secure="true"))
-    token = csrf_from(c.get("/login").text)
-    r = c.post("/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN})
+    r = c.get("/login")
     assert "Secure" in r.headers["set-cookie"]
 
 
@@ -278,7 +285,7 @@ def test_throttle_backoff_grows_and_caps() -> None:
         t.record_failure("1.2.3.4", now)
         delays.append(t.retry_after("1.2.3.4", now))
     assert delays[0] >= 1.0
-    assert all(b >= a for a, b in zip(delays, delays[1:], strict=False))
+    assert all(b >= a for a, b in itertools.pairwise(delays))
     assert delays[4] >= 16.0
     assert max(delays) == 900.0
     assert t.retry_after("5.6.7.8", now) == 0.0
@@ -297,8 +304,14 @@ def test_login_throttled_over_http(env: Env) -> None:
     c = env.make_client(client=("192.168.68.50", 5000))
     token = csrf_from(c.get("/login").text)
     for _ in range(3):
-        c.post("/login", data={"password": "nope nope nope", "csrf_token": token}, headers={"Origin": ORIGIN})
-    r = c.post("/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN})
+        c.post(
+            "/login",
+            data={"password": "nope nope nope", "csrf_token": token},
+            headers={"Origin": ORIGIN},
+        )
+    r = c.post(
+        "/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN}
+    )
     assert r.status_code == 429
     assert "ssm_session" not in r.cookies
 
@@ -349,10 +362,16 @@ def test_client_ip_resolution() -> None:
 # --- audit (requirement 11, login part) -----------------------------------------------
 
 
-def test_login_audit_events_never_contain_password(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
+def test_login_audit_events_never_contain_password(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
     c = env.make_client(client=("192.168.68.51", 1))
     token = csrf_from(c.get("/login").text)
-    c.post("/login", data={"password": "wrong secret 999", "csrf_token": token}, headers={"Origin": ORIGIN})
+    c.post(
+        "/login",
+        data={"password": "wrong secret 999", "csrf_token": token},
+        headers={"Origin": ORIGIN},
+    )
     env.clock.advance(3600)
     login(c)
     out = capsys.readouterr().out
