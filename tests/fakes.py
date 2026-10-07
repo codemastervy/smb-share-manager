@@ -15,6 +15,7 @@ class FakeHelper:
         self.fail_next: str | None = None
         self.perm_state: dict[str, dict[str, Any]] = {}
         self.import_users: list[str] = []
+        self.import_dir = ""
 
     def _call(self, op: str, **kw: Any) -> None:
         self.calls.append((op, kw))
@@ -72,7 +73,9 @@ class FakeHelper:
 
     def import_scan(self) -> dict[str, Any]:
         self._call("import_scan")
-        return {"users": list(self.import_users)}
+        from ssm.importer import read_sections
+
+        return {"users": list(self.import_users), "sections": read_sections(self.import_dir)}
 
     def import_user(self, name: str) -> None:
         self._call("import_user", name=name)

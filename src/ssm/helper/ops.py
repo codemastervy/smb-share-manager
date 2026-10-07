@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ssm import fsinfo, render
+from ssm import fsinfo, importer, render
 from ssm import validators as v
 from ssm.helper import extrausers
 from ssm.models import ShareSpec
@@ -326,15 +326,22 @@ class HelperOps:
         return [ln for ln in out.splitlines() if ":" in ln]
 
     def import_scan(self) -> dict[str, Any]:
-        users, skipped = [], []
-        for ln in self._import_lines(["-L"]):
+        """Usernames from the old passdb (never hashes) and the old smb.conf sections."""
+        sections = importer.read_sections(self.cfg.import_dir)
+        users: list[str] = []
+        skipped: list[str] = []
+        try:
+            lines = self._import_lines(["-L"])
+        except HelperOpError as e:
+            return {"users": [], "skipped": [], "users_error": str(e), "sections": sections}
+        for ln in lines:
             name = ln.split(":", 1)[0]
             try:
                 v.validate_username(name)
                 users.append(name)
             except v.ValidationError:
                 skipped.append(name)
-        return {"users": sorted(users), "skipped": sorted(skipped)}
+        return {"users": sorted(users), "skipped": sorted(skipped), "sections": sections}
 
     def import_user(self, name: str) -> dict[str, Any]:
         name = _v(v.validate_username, name)

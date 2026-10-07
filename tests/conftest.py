@@ -66,6 +66,7 @@ def env(tmp_path: Path) -> Iterator[Env]:
     clock = Clock()
     helper = FakeHelper()
     settings = make_settings(tmp_path, volume)
+    helper.import_dir = settings.import_dir
 
     def make_client(settings: Settings = settings, **kw: Any) -> TestClient:
         app = create_app(settings, helper=helper, clock=clock)

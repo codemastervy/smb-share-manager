@@ -42,14 +42,17 @@ jobs:
         run: uv run mypy
       - name: bandit
         run: uv run bandit -q -r src -c pyproject.toml
-      - name: pip-audit
-        run: uv run pip-audit --skip-editable --strict
+      - name: pip-audit (all locked dependencies, runtime and dev)
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt -q -o "$RUNNER_TEMP/req.txt"
+          uv run pip-audit -r "$RUNNER_TEMP/req.txt" --require-hashes --disable-pip --strict
       - name: unit and fuzz tests
         run: uv run pytest -q -W ignore::DeprecationWarning
       - name: file-operation tests on a loop-mounted exFAT filesystem
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq exfatprogs
+          sudo apt-get install -y -qq exfatprogs "linux-modules-extra-$(uname -r)"
+          sudo modprobe exfat
           truncate -s 256M "$RUNNER_TEMP/exfat.img"
           mkfs.exfat "$RUNNER_TEMP/exfat.img"
           sudo mkdir -p /mnt/exfat-unit
@@ -119,7 +122,8 @@ jobs:
           enable-cache: false
       - run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq smbclient exfatprogs
+          sudo apt-get install -y -qq smbclient exfatprogs "linux-modules-extra-$(uname -r)"
+          sudo modprobe exfat
           uv sync --frozen
       - name: Integration tests (${{ matrix.fs }})
         run: scripts/ci/integration.sh "$LOCAL_TAG" "${{ matrix.fs }}"
