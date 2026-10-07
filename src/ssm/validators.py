@@ -220,26 +220,29 @@ def validate_volumes(volumes: Iterable[str]) -> list[str]:
     return out
 
 
+def validate_path_text(path: str) -> str:
+    """Character-level checks for a path that will be written into smb.conf (no I/O)."""
+    _no_control(path, "share path")
+    if not path.startswith("/"):
+        raise ValidationError("share path must be absolute")
+    for bad in _PATH_FORBIDDEN:
+        if bad in path:
+            raise ValidationError(f"share path must not contain {bad!r}")
+    if any(part != part.strip() for part in path.split("/")):
+        raise ValidationError("share path folders must not start or end with whitespace")
+    if os.path.normpath(path) != path and path != "/":
+        raise ValidationError("share path must be normalised (no '..', '//' or trailing '/')")
+    return path
+
+
 def validate_share_path(path: str, volumes: Iterable[str]) -> str:
     """An existing directory inside a configured volume. Returns the resolved path.
 
     The resolved path is what gets stored and rendered, so a symlink can never point a
     share outside its volume.
     """
-    _no_control(path, "share path")
-    if not path.startswith("/"):
-        raise ValidationError("share path must be absolute")
-    if path != path.strip():
-        raise ValidationError("share path must not start or end with whitespace")
-    real = os.path.realpath(path)
-    for candidate in (path, real):
-        for bad in _PATH_FORBIDDEN:
-            if bad in candidate:
-                raise ValidationError(f"share path must not contain {bad!r}")
-        if has_control_chars(candidate):
-            raise ValidationError("share path contains invalid characters")
-        if any(part != part.strip() for part in candidate.split("/")):
-            raise ValidationError("share path folders must not start or end with whitespace")
+    validate_path_text(path)
+    real = validate_path_text(os.path.realpath(path))
     roots = [os.path.realpath(v) for v in volumes]
     if not any(_is_within(real, root) for root in roots):
         raise ValidationError("share path is not inside a configured volume")

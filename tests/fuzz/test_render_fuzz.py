@@ -11,11 +11,30 @@ from hypothesis import strategies as st
 from ssm import render
 from ssm.models import ShareSpec
 
-NASTY = ["\n", "\r", "[", "]", "%", ";", "#", "\\", "=", " ", "\x85", "\x00", "\x7f",
-         "［", "］", " ", "﻿", "е"]
+NASTY = [
+    "\n",
+    "\r",
+    "[",
+    "]",
+    "%",
+    ";",
+    "#",
+    "\\",
+    "=",
+    " ",
+    "\x85",
+    "\x00",
+    "\x7f",
+    "［",
+    "］",
+    " ",
+    "﻿",
+    "е",
+]
 
-text = st.text(alphabet=st.one_of(st.characters(codec="utf-8"), st.sampled_from(NASTY)),
-               max_size=40)
+text = st.text(
+    alphabet=st.one_of(st.characters(codec="utf-8"), st.sampled_from(NASTY)), max_size=40
+)
 names = st.one_of(text, st.from_regex(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,20}", fullmatch=True))
 users = st.one_of(text, st.from_regex(r"[a-z_][a-z0-9_-]{0,10}", fullmatch=True))
 paths = st.one_of(text, st.builds(lambda t: "/mnt/files/" + t, text))
