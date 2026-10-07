@@ -74,7 +74,9 @@ def test_invalid_share_names(name: str) -> None:
         v.validate_share_name(name)
 
 
-@pytest.mark.parametrize("name", ["global", "GLOBAL", "Homes", "printers", "print$", "IPC$", "globals"])
+@pytest.mark.parametrize(
+    "name", ["global", "GLOBAL", "Homes", "printers", "print$", "IPC$", "globals"]
+)
 def test_reserved_share_names(name: str) -> None:
     with pytest.raises(v.ValidationError):
         v.validate_share_name(name)
