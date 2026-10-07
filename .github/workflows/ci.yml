@@ -1,0 +1,21 @@
+# Runs on every pull request (including Dependabot's) and on pushes to branches other than
+# main. Never publishes. Its jobs are the required status checks for merging into main.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-test.yml

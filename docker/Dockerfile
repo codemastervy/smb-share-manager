@@ -1,14 +1,12 @@
-# syntax=docker/dockerfile:1
 # smb-share-manager image. Base images are pinned by digest; Dependabot keeps them current.
+# (Both FROM lines name the same Debian image; keep them in sync.)
 # Debian packages are deliberately not version-pinned so that the weekly --pull --no-cache
 # rebuild picks up Debian security updates.
-
-ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 FROM ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc AS uv
 
 # ---- build stage: Python dependencies from the hash-locked uv.lock ----------------------
-FROM ${DEBIAN_IMAGE} AS build
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv \
  && rm -rf /var/lib/apt/lists/*
@@ -23,7 +21,7 @@ RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /
  && find /opt/venv -name '__pycache__' -prune -exec rm -rf {} +
 
 # ---- runtime ------------------------------------------------------------------------------
-FROM ${DEBIAN_IMAGE}
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 ARG APP_VERSION=dev
 ARG BUILD_DATE=unknown
 ARG VCS_REF=unknown

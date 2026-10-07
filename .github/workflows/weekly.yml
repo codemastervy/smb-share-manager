@@ -1,0 +1,77 @@
+# Weekly rebuild with --pull --no-cache so Debian/base-image security fixes land even when
+# no dependency changed. Pushes latest only if every check is green; otherwise opens (or
+# comments on) an issue labelled weekly-build-failed and pushes nothing.
+name: weekly-rebuild
+
+on:
+  schedule:
+    - cron: "23 3 * * 1" # Mondays 03:23 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    # GitHub disables scheduled workflows after 60 days without repository activity.
+    # Re-enabling the workflow through the API resets that timer.
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh api -X PUT "repos/$REPO/actions/workflows/weekly.yml/enable"
+
+  test:
+    needs: keepalive
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-test.yml
+    with:
+      no_cache: true
+
+  push:
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/push-image.yml
+    with:
+      date_tag: ${{ needs.test.outputs.date_tag }}
+      short_sha: ${{ needs.test.outputs.short_sha }}
+
+  report:
+    needs: [keepalive, test, push]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.push.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          label=weekly-build-failed
+          existing=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
+          if [ "$RESULT" = "success" ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "Weekly rebuild is green again: $RUN_URL"
+            fi
+            exit 0
+          fi
+          gh label create "$label" --color B60205 --description "Weekly image rebuild failed" --force
+          body="The weekly rebuild failed ($RESULT); nothing was pushed, so the server keeps the previous image. Run: $RUN_URL"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Weekly image rebuild failed" --label "$label" --body "$body"
+          fi
