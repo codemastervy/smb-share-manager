@@ -85,13 +85,10 @@ def _share_lines(s: ShareSpec) -> list[str]:
     ]
     if s.no_unix_perms:
         # exFAT/vfat/ntfs: no xattrs and no unix permissions, so no named-stream module
-        # can work (streams_xattr and streams_depot both need xattrs). Keep vfs_fruit
-        # loaded (macOS negotiates its extensions per connection) with the resource fork
-        # stored as an AppleDouble file; Finder stores other metadata in ._ files itself.
+        # can work and vfs_fruit's resource-fork handling fails too (verified in CI).
+        # Load no VFS modules: Samba then does not advertise named streams and macOS
+        # falls back to ._ AppleDouble files, exactly as on any FAT-formatted disk.
         lines += [
-            _line("vfs objects", "fruit"),
-            _line("fruit:metadata", "netatalk"),
-            _line("fruit:resource", "file"),
             _line("ea support", "no"),
             _line("store dos attributes", "no"),
             _line("map archive", "no"),

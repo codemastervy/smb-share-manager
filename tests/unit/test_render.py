@@ -84,9 +84,9 @@ def test_zero_members_rendered_unavailable() -> None:
 
 def test_no_unix_perms_share_avoids_xattrs() -> None:
     p = params(render.render_shares([share(no_unix_perms=True)]), "Photos")
-    assert "streams_xattr" not in p["vfs objects"]
-    assert "fruit" in p["vfs objects"]
+    assert "vfs objects" not in p  # no fruit/streams: they need xattrs (see render.py)
     assert p["ea support"] == "no"
+    assert p["store dos attributes"] == "no"
 
 
 def test_unix_share_uses_streams_xattr() -> None:
