@@ -116,24 +116,41 @@ def _users(val: str) -> tuple[list[str], list[str]]:
     return users, groups
 
 
-def parse_import(import_dir: str, volumes: list[str]) -> list[ImportedShare]:
+def read_sections(import_dir: str) -> dict[str, dict[str, str]]:
+    """Read the old smb.conf (and its includes) into {section: {param: value}}.
+
+    Runs in the root helper: the /import copy is root-only because it holds password
+    hashes. Nothing here is validated; that happens in ``shares_from_sections``.
+    """
     etc_dir = os.path.join(import_dir, "etc-samba")
     main = os.path.join(etc_dir, "smb.conf")
-    if not os.path.isfile(main):
-        return []
+    if not os.path.isfile(main) or os.path.islink(main):
+        return {}
     triples: list[tuple[str, str, str]] = []
     _read_conf(main, etc_dir, 0, triples)
     sections: dict[str, dict[str, str]] = {}
-    order: list[str] = []
     for sec, key, val in triples:
         if sec.lower() in SKIP_SECTIONS or not sec:
             continue
-        if sec not in sections:
-            sections[sec] = {}
-            order.append(sec)
+        sections.setdefault(sec, {})
         if key:
             sections[sec][key] = val
-    return [_to_share(name, sections[name], volumes) for name in order]
+    return sections
+
+
+def shares_from_sections(sections: object, volumes: list[str]) -> list[ImportedShare]:
+    if not isinstance(sections, dict):
+        return []
+    out = []
+    for name, params in sections.items():
+        if isinstance(name, str) and isinstance(params, dict):
+            clean = {str(k): str(val) for k, val in params.items()}
+            out.append(_to_share(name, clean, volumes))
+    return out
+
+
+def parse_import(import_dir: str, volumes: list[str]) -> list[ImportedShare]:
+    return shares_from_sections(read_sections(import_dir), volumes)
 
 
 def _to_share(name: str, p: dict[str, str], volumes: list[str]) -> ImportedShare:
@@ -217,17 +234,19 @@ def register_routes(
 ) -> None:
     @app.get("/import")
     async def import_page(request: Request, s: SessionRow = Depends(require_read)) -> Response:
-        shares = parse_import(settings.import_dir, volumes)
         ctx: dict[str, Any] = {
-            "shares": shares,
+            "shares": [],
             "existing_shares": {x.name.lower() for x in registry.list_shares()},
             "existing_users": set(registry.list_users()),
             "users": [],
-            "mounted": os.path.isdir(settings.import_dir) and bool(os.listdir(settings.import_dir)),
+            "mounted": os.path.isdir(settings.import_dir),
         }
         if ctx["mounted"]:
             try:
-                ctx["users"] = helper.import_scan().get("users", [])
+                scan = helper.import_scan()
+                ctx["users"] = scan.get("users", [])
+                ctx["users_error"] = scan.get("users_error", "")
+                ctx["shares"] = shares_from_sections(scan.get("sections"), volumes)
             except HelperError as e:
                 ctx["users_error"] = str(e)
         return render(request, "import.html", ctx, session=s)
@@ -252,7 +271,11 @@ def register_routes(
     async def import_share(request: Request, s: SessionRow = Depends(require_write)) -> Response:
         form = await form_dict(request)
         name = form.get("name", "")
-        found = {x.name: x for x in parse_import(settings.import_dir, volumes)}.get(name)
+        try:
+            sections = helper.import_scan().get("sections")
+        except HelperError as e:
+            return back("/import", err=str(e))
+        found = {x.name: x for x in shares_from_sections(sections, volumes)}.get(name)
         if found is None:
             return back("/import", err="That share is not in the imported configuration.")
         path = form.get("path") or found.path
