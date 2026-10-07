@@ -329,7 +329,7 @@ def test_alternate_data_streams(setup: dict[str, Any]) -> None:
         sess.connect()
         tree = TreeConnect(sess, r"\\127.0.0.1\S1")
         tree.connect()
-        for name in ("streamtest.txt", "streamtest.txt:com.apple.metadata:test"):
+        for name in ("streamtest.txt", "streamtest.txt:userstream", "streamtest.txt:AFP_Resource"):
             f = Open(tree, name)
             f.create(
                 ImpersonationLevel.Impersonation,

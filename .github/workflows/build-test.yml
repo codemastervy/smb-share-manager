@@ -59,7 +59,8 @@ jobs:
           sudo mount -o loop,uid="$(id -u)",gid="$(id -g)",umask=0002 "$RUNNER_TEMP/exfat.img" /mnt/exfat-unit
           SSM_TEST_EXFAT_DIR=/mnt/exfat-unit uv run pytest -v -s -W ignore::DeprecationWarning \
             tests/unit/test_files.py 2>&1 | tee "$RUNNER_TEMP/exfat.log"
-          echo "renameat2 on exFAT: $(grep -o 'renameat2 native: [a-z]*' "$RUNNER_TEMP/exfat.log" | sort -u)" >> "$GITHUB_STEP_SUMMARY"
+          mode=$(grep -o 'renameat2 native: [a-z]*' "$RUNNER_TEMP/exfat.log" | sort -u)
+          echo "exFAT rename path: $mode" >> "$GITHUB_STEP_SUMMARY"
           sudo umount /mnt/exfat-unit
 
   image:
