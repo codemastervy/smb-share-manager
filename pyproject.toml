@@ -49,7 +49,7 @@ ignore = ["S603", "S607"]  # subprocess use is deliberate and argv-only; reviewe
 extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "S108", "S311", "S104", "RUF001"]
+"tests/**" = ["S101", "S105", "S106", "S108", "S311", "S104", "RUF001", "E501"]
 
 [tool.mypy]
 python_version = "3.12"

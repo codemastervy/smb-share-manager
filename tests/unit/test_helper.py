@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import stat
+import tempfile
 import textwrap
 import threading
 from pathlib import Path
@@ -28,7 +29,7 @@ BASE_CONF = textwrap.dedent(
     """
 )
 
-FAKE = r'''#!/usr/bin/env python3
+FAKE = r"""#!/usr/bin/env python3
 import json, os, re, sys
 d = os.environ["FAKE_DIR"]
 name = os.path.basename(sys.argv[0])
@@ -57,7 +58,8 @@ elif name == "pdbedit":
     users = [u for u in open(os.path.join(d, "pdb_users")).read().split() if u]
     if "-Lw" in sys.argv or ("-L" in sys.argv and "-w" in sys.argv):
         for i, u in enumerate(users):
-            print(f"{u}:{3000+i}:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX:8846F7EAEE8FB117AD06BDD830B7586C:[U          ]:LCT-00000000:")
+            lm, nt = "X" * 32, "8846F7EAEE8FB117AD06BDD830B7586C"
+            print(f"{u}:{3000+i}:{lm}:{nt}:[U          ]:LCT-00000000:")
     elif "-L" in sys.argv:
         for i, u in enumerate(users):
             print(f"{u}:{3000+i}:")
@@ -65,7 +67,7 @@ elif name == "id":
     target = sys.argv[-1]
     system = open(os.path.join(d, "system_users")).read().split()
     sys.exit(0 if target in system else 1)
-'''
+"""
 
 
 @pytest.fixture
@@ -89,9 +91,7 @@ def fake(tmp_path: Path) -> dict[str, Any]:
     etc = tmp_path / "etc"
     etc.mkdir()
     base = etc / "smb.conf"
-    base.write_text(
-        BASE_CONF.format(globals=samba / "globals.conf", shares=samba / "shares.conf")
-    )
+    base.write_text(BASE_CONF.format(globals=samba / "globals.conf", shares=samba / "shares.conf"))
     cfg = HelperConfig(
         base_conf=str(base),
         shares_conf=str(samba / "shares.conf"),
@@ -140,7 +140,7 @@ def assert_double_dash(fake: dict[str, Any]) -> None:
         if c["bin"] in POSITIONAL_BINS:
             assert "--" in c["argv"], c
             idx = c["argv"].index("--")
-            assert len(c["argv"]) == idx + 1, c  # exactly one positional, after --
+            assert len(c["argv"]) == idx + 2, c  # exactly one positional, after --
 
 
 def test_user_lifecycle_argv_and_stdin(fake: dict[str, Any]) -> None:
@@ -183,9 +183,10 @@ def test_uid_reuse_after_delete_is_not_lower_than_max(fake: dict[str, Any]) -> N
 def test_system_account_collision_refused(fake: dict[str, Any]) -> None:
     with pytest.raises(HelperOpError, match="system account"):
         fake["ops"].user_add("ubuntu")
-    assert not Path(fake["cfg"].extrausers_dir, "passwd").exists() or "ubuntu" not in Path(
-        fake["cfg"].extrausers_dir, "passwd"
-    ).read_text()
+    assert (
+        not Path(fake["cfg"].extrausers_dir, "passwd").exists()
+        or "ubuntu" not in Path(fake["cfg"].extrausers_dir, "passwd").read_text()
+    )
 
 
 @pytest.mark.parametrize("bad", ["root", "Alice", "-rf", "--help", "a b", "a\nb", "x" * 40])
@@ -231,7 +232,7 @@ def test_apply_writes_validated_config_and_reloads(fake: dict[str, Any]) -> None
     assert "[Photos]" in text and "valid users = alice" in text
     bins = [c["bin"] for c in calls(fake)]
     assert bins.index("testparm") < bins.index("smbcontrol")
-    reload = [c for c in calls(fake) if c["bin"] == "smbcontrol"][0]
+    reload = next(c for c in calls(fake) if c["bin"] == "smbcontrol")
     assert reload["argv"] == ["smbd", "reload-config"]
     assert fake["base"].read_bytes() == before
 
@@ -239,7 +240,7 @@ def test_apply_writes_validated_config_and_reloads(fake: dict[str, Any]) -> None
 def test_testparm_runs_on_temp_copy_not_live_file(fake: dict[str, Any]) -> None:
     add_alice(fake)
     fake["ops"].apply_shares([share(fake)])
-    tp = [c for c in calls(fake) if c["bin"] == "testparm"][0]
+    tp = next(c for c in calls(fake) if c["bin"] == "testparm")
     assert tp["argv"][-1] != fake["cfg"].base_conf
     assert not Path(tp["argv"][-1]).exists()  # temp copy cleaned up
 
@@ -389,9 +390,7 @@ def test_perm_refuses_outside_volume_and_symlink(fake: dict[str, Any]) -> None:
     with pytest.raises(HelperOpError):
         fake["ops"].perm_plan(str(fake["vol"] / "link"))
     with pytest.raises(HelperOpError):
-        fake["ops"].perm_apply(
-            str(fake["vol"] / "link"), {"uid": 0, "gid": 0, "mode": "0755"}
-        )
+        fake["ops"].perm_apply(str(fake["vol"] / "link"), {"uid": 0, "gid": 0, "mode": "0755"})
 
 
 # --- import ------------------------------------------------------------------------------
@@ -409,7 +408,7 @@ def test_import_scan_lists_valid_users_only(fake: dict[str, Any]) -> None:
     res = fake["ops"].import_scan()
     assert res["users"] == ["isherveer", "jagdev"]
     assert sorted(res["skipped"]) == ["Bad-User", "root"]
-    pdb = [c for c in calls(fake) if c["bin"] == "pdbedit"][0]
+    pdb = next(c for c in calls(fake) if c["bin"] == "pdbedit")
     src = Path(fake["cfg"].import_dir) / "var-lib-samba" / "private" / "passdb.tdb"
     assert str(src) not in " ".join(pdb["argv"])  # works on a copy, never the original
 
@@ -434,7 +433,7 @@ def test_import_user_not_in_passdb(fake: dict[str, Any]) -> None:
 
 @pytest.fixture
 def server(fake: dict[str, Any]) -> Any:
-    sock_path = Path(fake["cfg"].tmp_dir).parent / "h.sock"
+    sock_path = Path(tempfile.mkdtemp(dir="/tmp")) / "h.sock"  # AF_UNIX paths are short
     srv = HelperServer(fake["ops"], str(sock_path), allowed_uid=os.getuid(), sock_gid=os.getgid())
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
@@ -478,9 +477,10 @@ def test_server_rejects_unknown_ops_and_bad_args(server: Any, payload: bytes) ->
 
 
 def test_server_rejects_other_uids(fake: dict[str, Any]) -> None:
-    sock_path = Path(fake["cfg"].tmp_dir).parent / "h2.sock"
-    srv = HelperServer(fake["ops"], str(sock_path), allowed_uid=os.getuid() + 12345,
-                       sock_gid=os.getgid())
+    sock_path = Path(tempfile.mkdtemp(dir="/tmp")) / "h2.sock"
+    srv = HelperServer(
+        fake["ops"], str(sock_path), allowed_uid=os.getuid() + 12345, sock_gid=os.getgid()
+    )
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
