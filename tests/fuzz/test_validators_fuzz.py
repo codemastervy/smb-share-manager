@@ -10,8 +10,8 @@ from hypothesis import strategies as st
 from ssm import validators as v
 
 CONTROL = [chr(c) for c in range(0x20)] + ["\x7f"]
-DANGEROUS = ["\n", "\r", "[", "]", "%", ";", "#", "\\", " ", " ", "\x85"]
-LOOKALIKES = ["［", "］", "％", "；", "＃", " ", "​", "﻿", "е", "а", "ﬁ"]
+DANGEROUS = ["\n", "\r", "[", "]", "%", ";", "#", "\\", "\u2028", "\u2029", "\x85"]
+LOOKALIKES = ["［", "］", "％", "；", "＃", "\u00a0", "\u200b", "\ufeff", "е", "а", "ﬁ"]
 
 any_text = st.text(alphabet=st.characters(codec="utf-8"), max_size=80)
 spiced = st.builds(

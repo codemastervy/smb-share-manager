@@ -122,7 +122,7 @@ def test_duplicate_names_case_insensitive_refused() -> None:
         ("comment", "ok\n[evil]\npath = /"),
         ("comment", "100% done"),
         ("comment", "trailing\\"),
-        ("comment", "line sep"),
+        ("comment", "line\u2028sep"),
         ("comment", "nel\x85x"),
         ("path", "/mnt/files/x\n[evil]"),
         ("path", "relative/path"),
