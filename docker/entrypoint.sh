@@ -47,6 +47,8 @@ fi
 "${ROOT_ENV[@]}" /opt/venv/bin/python -m ssm.helper.server &
 pids+=($!)
 
+# Group-writable files and folders: SMB members share the smbusers group.
+umask 0002
 setpriv --reuid="$PUID" --regid="$PGID" --groups="$PGID,$SMB_GID" --no-new-privs \
   /opt/venv/bin/python -m ssm.web.main &
 pids+=($!)

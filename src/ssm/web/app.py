@@ -130,10 +130,8 @@ def create_app(
         return row
 
     def import_mounted() -> bool:
-        try:
-            return any(os.scandir(settings.import_dir))
-        except OSError:
-            return False
+        # /import is root-only (it holds password hashes); its presence is enough.
+        return os.path.isdir(settings.import_dir)
 
     def render(
         request: Request,
