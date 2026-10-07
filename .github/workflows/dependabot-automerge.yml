@@ -37,4 +37,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR"
+        # Retried: the GraphQL API occasionally fails transiently.
+        run: |
+          for i in 1 2 3; do
+            gh pr merge --auto --squash "$PR" && exit 0
+            sleep $((i * 20))
+          done
+          exit 1
