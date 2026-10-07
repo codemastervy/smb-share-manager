@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}SMB users{% endblock %}
+{% block content %}
+<h1>SMB users</h1>
+<form method="post" action="/users" class="card">
+  <h2>New user</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Username
+    <input name="name" required maxlength="32" pattern="[a-z_][a-z0-9_\-]{0,31}" autocomplete="off">
+    <small>Lowercase letters, digits, underscore, dash.</small>
+  </label>
+  <label>Password <input type="password" name="password" required minlength="10" autocomplete="new-password"></label>
+  <label>Repeat password <input type="password" name="password2" required minlength="10" autocomplete="new-password"></label>
+  <button type="submit">Create user</button>
+</form>
+
+{% if users %}
+<table>
+  <thead><tr><th>User</th><th>Member of</th><th>Change password</th><th></th></tr></thead>
+  <tbody>
+  {% for u in users %}
+  <tr>
+    <td>{{ u.name }}</td>
+    <td>{{ u.shares | join(", ") or "-" }}</td>
+    <td>
+      <form method="post" action="/users/{{ u.name }}/password" class="row">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="password" name="password" required minlength="10" placeholder="new password" autocomplete="new-password">
+        <input type="password" name="password2" required minlength="10" placeholder="repeat" autocomplete="new-password">
+        <button type="submit">Set</button>
+      </form>
+    </td>
+    <td>
+      <form method="post" action="/users/{{ u.name }}/delete" hx-confirm="Delete SMB user {{ u.name }}? Their files are not deleted.">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit" class="danger">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No SMB users yet.</p>
+{% endif %}
+{% endblock %}

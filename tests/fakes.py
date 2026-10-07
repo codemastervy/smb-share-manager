@@ -58,7 +58,12 @@ class FakeHelper:
         self._call("perm_plan", path=path)
         return self.perm_state.get(
             path,
-            {"path": path, "fs_type": "ext4", "changes": [], "before": {"uid": 0, "gid": 0, "mode": "0755"}},
+            {
+                "path": path,
+                "fs_type": "ext4",
+                "changes": [],
+                "before": {"uid": 0, "gid": 0, "mode": "0755"},
+            },
         )
 
     def perm_apply(self, path: str, expected_before: dict[str, Any]) -> dict[str, Any]:
