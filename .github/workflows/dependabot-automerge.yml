@@ -1,0 +1,40 @@
+# Minor/patch Dependabot PRs: enable auto-merge (squash). GitHub merges them only after every
+# required status check (the ci workflow) is green. Major updates are labelled needs-review
+# and never auto-merged.
+name: dependabot-automerge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: ${{ github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ github.token }}
+      - name: Major update: label for review, never merge
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-major' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh label create needs-review --color D93F0B --description "Needs a human review" --force -R "${{ github.repository }}"
+          gh pr edit "$PR" --add-label needs-review
+      - name: Minor/patch update (or a base-image digest refresh): auto-merge once required checks pass
+        if: >-
+          ${{ steps.meta.outputs.update-type == 'version-update:semver-minor'
+           || steps.meta.outputs.update-type == 'version-update:semver-patch'
+           || (steps.meta.outputs.package-ecosystem == 'docker' && steps.meta.outputs.update-type == '') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR"
