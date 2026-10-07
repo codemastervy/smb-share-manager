@@ -5,7 +5,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches-ignore: [main]
+    branches-ignore: [main, "dependabot/**"]
   workflow_dispatch:
 
 permissions: {}
