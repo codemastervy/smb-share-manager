@@ -84,11 +84,13 @@ def _share_lines(s: ShareSpec) -> list[str]:
         _line("directory mask", "2775"),
     ]
     if s.no_unix_perms:
-        # exFAT/vfat/ntfs: no xattrs and no unix permissions. Keep vfs_fruit loaded (macOS
-        # negotiates its extensions on the first tree connect) but store streams as files.
+        # exFAT/vfat/ntfs: no xattrs and no unix permissions, so no named-stream module
+        # can work (streams_xattr and streams_depot both need xattrs). Keep vfs_fruit
+        # loaded (macOS negotiates its extensions per connection) with the resource fork
+        # stored as an AppleDouble file; Finder stores other metadata in ._ files itself.
         lines += [
-            _line("vfs objects", "fruit streams_depot"),
-            _line("fruit:metadata", "stream"),
+            _line("vfs objects", "fruit"),
+            _line("fruit:metadata", "netatalk"),
             _line("fruit:resource", "file"),
             _line("ea support", "no"),
             _line("store dos attributes", "no"),

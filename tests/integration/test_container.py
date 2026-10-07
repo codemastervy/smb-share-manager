@@ -308,8 +308,10 @@ def test_old_protocols_refused(setup: dict[str, Any]) -> None:
 
 
 def test_alternate_data_streams(setup: dict[str, Any]) -> None:
-    """macOS stores metadata in streams; fruit + streams_xattr/streams_depot must accept it."""
+    """macOS metadata: on ext4 named streams work (fruit + streams_xattr); on exFAT (no
+    xattrs) generic streams are unsupported but the resource fork works (stored as a file)."""
     from smbprotocol.connection import Connection
+    from smbprotocol.exceptions import SMBResponseException
     from smbprotocol.open import (
         CreateDisposition,
         CreateOptions,
@@ -322,15 +324,9 @@ def test_alternate_data_streams(setup: dict[str, Any]) -> None:
     from smbprotocol.session import Session
     from smbprotocol.tree import TreeConnect
 
-    conn = Connection(uuid.uuid4(), "127.0.0.1", int(PORT))
-    conn.connect()
-    try:
-        sess = Session(conn, "rwuser", PW["rwuser"])
-        sess.connect()
-        tree = TreeConnect(sess, r"\\127.0.0.1\S1")
-        tree.connect()
-        for name in ("streamtest.txt", "streamtest.txt:userstream", "streamtest.txt:AFP_Resource"):
-            f = Open(tree, name)
+    def write_read(tree: TreeConnect, name: str) -> bool:
+        f = Open(tree, name)
+        try:
             f.create(
                 ImpersonationLevel.Impersonation,
                 FilePipePrinterAccessMask.GENERIC_READ | FilePipePrinterAccessMask.GENERIC_WRITE,
@@ -339,9 +335,24 @@ def test_alternate_data_streams(setup: dict[str, Any]) -> None:
                 CreateDisposition.FILE_OVERWRITE_IF,
                 CreateOptions.FILE_NON_DIRECTORY_FILE,
             )
-            f.write(b"data", 0)
-            assert f.read(0, 4) == b"data"
-            f.close()
+        except SMBResponseException:
+            return False
+        f.write(b"data", 0)
+        assert f.read(0, 4) == b"data"
+        f.close()
+        return True
+
+    conn = Connection(uuid.uuid4(), "127.0.0.1", int(PORT))
+    conn.connect()
+    try:
+        sess = Session(conn, "rwuser", PW["rwuser"])
+        sess.connect()
+        tree = TreeConnect(sess, r"\\127.0.0.1\S1")
+        tree.connect()
+        assert write_read(tree, "streamtest.txt")
+        assert write_read(tree, "streamtest.txt:AFP_Resource")
+        generic = write_read(tree, "streamtest.txt:userstream")
+        assert generic is (FS != "exfat"), f"generic named stream on {FS}: {generic}"
     finally:
         conn.disconnect()
 
