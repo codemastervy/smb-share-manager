@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   keepalive:
+    timeout-minutes: 5
     # GitHub disables scheduled workflows after 60 days without repository activity.
     # Re-enabling the workflow through the API resets that timer.
     runs-on: ubuntu-24.04
@@ -48,6 +49,7 @@ jobs:
       short_sha: ${{ needs.test.outputs.short_sha }}
 
   report:
+    timeout-minutes: 5
     needs: [keepalive, test, push]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
