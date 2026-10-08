@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from ssm import importer
-from tests.conftest import ORIGIN, Env, login, post
+from tests.conftest import ORIGIN, Env, call, login
 
 CASA_MAIN = """\
 [global]
@@ -135,20 +135,23 @@ def test_import_page_and_banner(imp: Path, env: Env) -> None:
     env.helper.import_users = ["isherveer", "jagdev", "root"]
     c = env.make_client()
     login(c)
-    r = c.get("/import")
-    assert r.status_code == 200
-    assert "Isherveer" in r.text and "was anonymous" in r.text.lower()
-    assert "still mounted" in c.get("/shares").text
+    data = c.get("/api/import").json()
+    assert data["mounted"] is True
+    names = {s["name"]: s for s in data["shares"]}
+    assert names["Files"]["was_anonymous"] is True
+    assert names["Isherveer"]["problems"] == []
+    assert [u["username"] for u in data["users"]] == ["isherveer", "jagdev", "root"]
+    assert c.get("/api/info").json()["import_mounted"] is True
 
 
 def test_import_users_then_share(imp: Path, env: Env) -> None:
     env.helper.import_users = ["isherveer", "jagdev"]
     c = env.make_client()
     csrf = login(c)
-    assert post(c, "/import/user", csrf, {"name": "isherveer"}).status_code == 303
+    assert call(c, "POST", "/api/import/user", csrf, json={"username": "isherveer"}).status_code == 200
     assert "isherveer" in env.helper.users
-    r = post(c, "/import/share", csrf, {"name": "Isherveer"})
-    assert r.status_code == 303 and "err=" not in r.headers["location"]
+    r = call(c, "POST", "/api/import/share", csrf, json={"name": "Isherveer"})
+    assert r.status_code == 200, r.text
     assert [s.name for s in env.helper.shares] == ["Isherveer"]
 
 
@@ -156,19 +159,17 @@ def test_import_user_not_in_scan_refused(imp: Path, env: Env) -> None:
     env.helper.import_users = ["isherveer"]
     c = env.make_client()
     csrf = login(c)
-    r = post(c, "/import/user", csrf, {"name": "mallory"})
-    assert "err=" in r.headers["location"]
+    assert call(c, "POST", "/api/import/user", csrf, json={"username": "mallory"}).status_code == 400
     assert "mallory" not in env.helper.users
 
 
 def test_import_anonymous_share_needs_ack(imp: Path, env: Env) -> None:
     c = env.make_client()
     csrf = login(c)
-    r = post(c, "/import/share", csrf, {"name": "Files"})
-    assert "err=" in r.headers["location"]
+    assert call(c, "POST", "/api/import/share", csrf, json={"name": "Files"}).status_code == 400
     assert env.helper.shares == []
-    r = post(c, "/import/share", csrf, {"name": "Files", "ack_anonymous": "yes"})
-    assert "err=" not in r.headers["location"]
+    r = call(c, "POST", "/api/import/share", csrf, json={"name": "Files", "ack_anonymous": True})
+    assert r.status_code == 200, r.text
     assert env.helper.shares[0].all_users == "rw"
 
 
@@ -176,8 +177,7 @@ def test_import_share_with_problems_refused(imp: Path, env: Env) -> None:
     c = env.make_client()
     csrf = login(c)
     for name in ("Bad]Name", "Weird", "Sandip"):
-        r = post(c, "/import/share", csrf, {"name": name})
-        assert "err=" in r.headers["location"]
+        assert call(c, "POST", "/api/import/share", csrf, json={"name": name}).status_code == 400
     assert env.helper.shares == []
 
 
@@ -186,9 +186,9 @@ def test_import_share_path_override(imp: Path, env: Env) -> None:
     (env.volume / "Sandip").mkdir()
     c = env.make_client()
     csrf = login(c)
-    post(c, "/import/user", csrf, {"name": "sandip"})
-    r = post(c, "/import/share", csrf, {"name": "Sandip", "path": str(env.volume / "Sandip")})
-    assert "err=" not in r.headers["location"], r.headers["location"]
+    call(c, "POST", "/api/import/user", csrf, json={"username": "sandip"})
+    r = call(c, "POST", "/api/import/share", csrf, json={"name": "Sandip", "path": "/files/Sandip"})
+    assert r.status_code == 200, r.text
     assert env.helper.shares[0].path == str(env.volume / "Sandip")
 
 
@@ -196,7 +196,7 @@ def test_import_audit(imp: Path, env: Env, capsys: pytest.CaptureFixture[str]) -
     env.helper.import_users = ["isherveer"]
     c = env.make_client()
     csrf = login(c)
-    post(c, "/import/user", csrf, {"name": "isherveer"})
+    call(c, "POST", "/api/import/user", csrf, json={"username": "isherveer"})
     out = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
     assert any(e["event"] == "user_imported" and e["user"] == "isherveer" for e in out)
 
@@ -204,5 +204,5 @@ def test_import_audit(imp: Path, env: Env, capsys: pytest.CaptureFixture[str]) -
 def test_import_requires_csrf(imp: Path, env: Env) -> None:
     c = env.make_client()
     login(c)
-    r = c.post("/import/user", data={"name": "x"}, headers={"Origin": ORIGIN})
+    r = c.post("/api/import/user", json={"username": "x"}, headers={"Origin": ORIGIN})
     assert r.status_code == 403

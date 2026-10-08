@@ -12,7 +12,7 @@ from argon2 import PasswordHasher
 
 from ssm import auth
 from ssm.settings import ConfigError, Settings, load_settings
-from tests.conftest import ORIGIN, PASSWORD, Env, csrf_from, login, make_settings, post
+from tests.conftest import ORIGIN, PASSWORD, Env, call, login, make_settings, prelogin
 
 # --- startup -------------------------------------------------------------------------
 
@@ -56,101 +56,121 @@ def test_load_settings_parses_env(tmp_path: Path) -> None:
 def test_hash_login(env: Env) -> None:
     h = PasswordHasher().hash("hash password 123")
     s = make_settings(env.tmp, env.volume, admin_password=None, admin_password_hash=h)
-    c = env.make_client(s)
-    login(c, "hash password 123")
+    login(env.make_client(s), "hash password 123")
 
 
 # --- unauthenticated surface ---------------------------------------------------------
 
-PUBLIC = {"/login", "/healthz"}
+PUBLIC = {"/healthz", "/api/auth/status", "/api/auth/login"}
 
 
-def test_no_unauthenticated_routes_except_allowlist(env: Env) -> None:
+def test_no_unauthenticated_api_routes_except_allowlist(env: Env) -> None:
     c = env.make_client()
-    app = c.app
-    for route in app.routes:  # type: ignore[attr-defined]
+    pre = prelogin(c)
+    checked = 0
+    for route in c.app.routes:  # type: ignore[attr-defined]
         path = getattr(route, "path", "")
-        if path in PUBLIC or path.startswith("/static"):
+        if path in PUBLIC or not path.startswith("/api"):
             continue
-        url = path.replace("{name}", "x").replace("{path:path}", "x")
+        url = path.replace("{share_id}", "x").replace("{username}", "x")
         for method in sorted(getattr(route, "methods", None) or {"GET"}):
             if method == "HEAD":
                 continue
-            r = c.request(method, url, headers={"Origin": ORIGIN})
-            assert r.status_code in (303, 401, 403), (method, url, r.status_code)
-            if r.status_code == 303:
-                assert r.headers["location"].startswith("/login")
+            r = c.request(method, url, headers={"Origin": ORIGIN, "X-CSRF-Token": pre})
+            assert r.status_code == 401, (method, url, r.status_code)
+            checked += 1
+    assert checked > 20
 
 
-@pytest.mark.parametrize("url", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
-def test_no_public_api_docs(env: Env, url: str) -> None:
+def test_non_api_routes_serve_only_the_static_app(env: Env) -> None:
     c = env.make_client()
-    assert c.get(url).status_code in (303, 404)
+    for url in ("/", "/files/files/x", "/shares", "/anything"):
+        r = c.get(url)
+        assert r.status_code == 200
+        assert r.text.startswith("<!doctype html>")
+        assert r.headers["cache-control"] == "no-store"
+    assert c.get("/assets/index-abc.js").status_code == 200
+    assert c.post("/", headers={"Origin": ORIGIN}).status_code in (404, 405)
+
+
+@pytest.mark.parametrize(
+    "url", ["/docs", "/redoc", "/openapi.json", "/api/docs", "/api/openapi.json"]
+)
+def test_no_public_api_docs(env: Env, url: str) -> None:
+    r = env.make_client().get(url)
+    assert "swagger" not in r.text.lower() and '"openapi"' not in r.text
+
+
+def test_unknown_api_route_is_404_json(env: Env) -> None:
+    c = env.make_client()
     login(c)
-    assert c.get(url).status_code == 404
+    r = c.get("/api/nope")
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("application/json")
 
 
 def test_healthz_has_no_sensitive_info(env: Env) -> None:
     r = env.make_client().get("/healthz")
     assert r.status_code == 200
-    body = r.json()
-    assert set(body) == {"status", "version", "build_date"}
+    assert set(r.json()) == {"status", "version", "build_date"}
 
 
 # --- login / cookies -----------------------------------------------------------------
 
 
+def test_status_unauthenticated(env: Env) -> None:
+    body = env.make_client().get("/api/auth/status").json()
+    assert body["authenticated"] is False and body["csrf"]
+
+
+def _login_raw(c, pw: str, origin: str = ORIGIN, token: str | None = None, xff: str | None = None):  # type: ignore[no-untyped-def]
+    pre = c.get("/api/auth/status").json()["csrf"] if token is None else token
+    headers = {"Origin": origin, "X-CSRF-Token": pre}
+    if xff:
+        headers["X-Forwarded-For"] = xff
+    return c.post("/api/auth/login", json={"password": pw}, headers=headers)
+
+
 def test_wrong_password_rejected(env: Env) -> None:
-    c = env.make_client()
-    token = csrf_from(c.get("/login").text)
-    r = c.post(
-        "/login",
-        data={"password": "wrong password!!", "csrf_token": token},
-        headers={"Origin": ORIGIN},
-    )
+    r = _login_raw(env.make_client(), "wrong password!!")
     assert r.status_code == 401
     assert "ssm_session" not in r.cookies
 
 
-def test_login_requires_csrf(env: Env) -> None:
+def test_login_requires_prelogin_csrf(env: Env) -> None:
     c = env.make_client()
-    c.get("/login")
-    r = c.post("/login", data={"password": PASSWORD}, headers={"Origin": ORIGIN})
+    prelogin(c)
+    r = c.post("/api/auth/login", json={"password": PASSWORD}, headers={"Origin": ORIGIN})
     assert r.status_code == 403
+    assert _login_raw(c, PASSWORD, token="x" * 43).status_code == 403
 
 
-def test_login_cross_origin_rejected(env: Env) -> None:
+@pytest.mark.parametrize("origin", ["http://evil.example", "null", "https://testserver"])
+def test_login_bad_origin_rejected(env: Env, origin: str) -> None:
+    assert _login_raw(env.make_client(), PASSWORD, origin=origin).status_code == 403
+
+
+def test_login_form_encoded_rejected(env: Env) -> None:
     c = env.make_client()
-    token = csrf_from(c.get("/login").text)
+    pre = prelogin(c)
     r = c.post(
-        "/login",
-        data={"password": PASSWORD, "csrf_token": token},
-        headers={"Origin": "http://evil.example"},
+        "/api/auth/login",
+        data={"password": PASSWORD},
+        headers={"Origin": ORIGIN, "X-CSRF-Token": pre},
     )
-    assert r.status_code == 403
+    assert r.status_code in (415, 422)
 
 
 def test_session_cookie_flags_http(env: Env) -> None:
-    c = env.make_client()
-    token = csrf_from(c.get("/login").text)
-    r = c.post(
-        "/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN}
-    )
-    sc = r.headers["set-cookie"]
-    assert "ssm_session=" in sc
-    assert "HttpOnly" in sc
-    assert "SameSite=strict" in sc or "SameSite=Strict" in sc
-    assert "Secure" not in sc
-    assert "Path=/" in sc
+    sc = _login_raw(env.make_client(), PASSWORD).headers["set-cookie"]
+    assert "ssm_session=" in sc and "HttpOnly" in sc
+    assert "samesite=strict" in sc.lower()
+    assert "Secure" not in sc and "Path=/" in sc
 
 
 def test_session_cookie_secure_when_forced(env: Env) -> None:
-    # Behind a TLS-terminating proxy that is not in TRUSTED_PROXIES the app sees http, so
-    # COOKIE_SECURE=true must force the flag. (httpx then refuses to send the cookie back
-    # over http, so only the Set-Cookie header is checked here.)
     c = env.make_client(make_settings(env.tmp, env.volume, cookie_secure="true"))
-    r = c.get("/login")
-    assert "Secure" in r.headers["set-cookie"]
+    assert "Secure" in c.get("/api/auth/status").headers["set-cookie"]
 
 
 def test_session_cookie_secure_on_https(env: Env) -> None:
@@ -160,12 +180,7 @@ def test_session_cookie_secure_on_https(env: Env) -> None:
 
     app = create_app(env.settings, helper=env.helper, clock=env.clock)
     c = TestClient(app, base_url="https://testserver", follow_redirects=False)
-    token = csrf_from(c.get("/login").text)
-    r = c.post(
-        "/login",
-        data={"password": PASSWORD, "csrf_token": token},
-        headers={"Origin": "https://testserver"},
-    )
+    r = _login_raw(c, PASSWORD, origin="https://testserver")
     assert "Secure" in r.headers["set-cookie"]
 
 
@@ -183,7 +198,7 @@ def test_session_tokens_random_and_only_hash_stored(env: Env) -> None:
 def test_forged_cookie_rejected(env: Env) -> None:
     c = env.make_client()
     c.cookies.set("ssm_session", "A" * 43)
-    assert c.get("/shares").status_code == 303
+    assert c.get("/api/shares").status_code == 401
 
 
 # --- expiry and revocation -----------------------------------------------------------
@@ -193,9 +208,9 @@ def test_idle_timeout(env: Env) -> None:
     c = env.make_client()
     login(c)
     env.clock.advance(8 * 3600 - 5)
-    assert c.get("/shares").status_code == 200
+    assert c.get("/api/shares").status_code == 200
     env.clock.advance(8 * 3600 + 1)
-    assert c.get("/shares").status_code == 303
+    assert c.get("/api/shares").status_code == 401
 
 
 def test_absolute_timeout(env: Env) -> None:
@@ -203,57 +218,54 @@ def test_absolute_timeout(env: Env) -> None:
     login(c)
     for _ in range(7 * 24 - 1):
         env.clock.advance(3600)
-        assert c.get("/shares").status_code == 200
+        assert c.get("/api/auth/status").json()["authenticated"] is True
     env.clock.advance(3601)
-    assert c.get("/shares").status_code == 303
+    assert c.get("/api/shares").status_code == 401
 
 
 def test_logout_revokes(env: Env) -> None:
     c = env.make_client()
     csrf = login(c)
     cookie = c.cookies["ssm_session"]
-    assert post(c, "/logout", csrf).status_code == 303
+    assert call(c, "POST", "/api/auth/logout", csrf).status_code == 200
     c2 = env.make_client()
     c2.cookies.set("ssm_session", cookie)
-    assert c2.get("/shares").status_code == 303
+    assert c2.get("/api/shares").status_code == 401
 
 
 def test_password_change_revokes_sessions(env: Env) -> None:
     c = env.make_client()
     login(c)
     cookie = c.cookies["ssm_session"]
-    new = make_settings(env.tmp, env.volume, admin_password="a brand new password")
-    c2 = env.make_client(new)
+    c2 = env.make_client(make_settings(env.tmp, env.volume, admin_password="a brand new password"))
     c2.cookies.set("ssm_session", cookie)
-    assert c2.get("/shares").status_code == 303
+    assert c2.get("/api/shares").status_code == 401
 
 
 # --- CSRF / Origin / Host ------------------------------------------------------------
 
+NEW_USER = {"username": "alice", "password": "alice password 1", "display_name": "Alice"}
+
 
 def test_csrf_missing_wrong_and_cross_origin(authed: tuple, env: Env) -> None:  # type: ignore[type-arg]
     c, csrf = authed
-    data = {"name": "alice", "password": "alice password 1", "password2": "alice password 1"}
-    assert c.post("/users", data=data, headers={"Origin": ORIGIN}).status_code == 403
-    bad = {**data, "csrf_token": "x" * 43}
-    assert c.post("/users", data=bad, headers={"Origin": ORIGIN}).status_code == 403
-    good = {**data, "csrf_token": csrf}
-    assert c.post("/users", data=good, headers={"Origin": "http://evil.example"}).status_code == 403
-    assert c.post("/users", data=good).status_code == 403  # neither Origin nor Referer
+    assert c.post("/api/users", json=NEW_USER, headers={"Origin": ORIGIN}).status_code == 403
+    bad = {"Origin": ORIGIN, "X-CSRF-Token": "x" * 43}
+    assert c.post("/api/users", json=NEW_USER, headers=bad).status_code == 403
+    evil = {"Origin": "http://evil.example", "X-CSRF-Token": csrf}
+    assert c.post("/api/users", json=NEW_USER, headers=evil).status_code == 403
+    assert c.post("/api/users", json=NEW_USER, headers={"X-CSRF-Token": csrf}).status_code == 403
     assert "alice" not in env.helper.users
-    r = c.post("/users", data=good, headers={"Referer": ORIGIN + "/users"})
-    assert r.status_code == 303
+    ok = {"Referer": ORIGIN + "/users", "X-CSRF-Token": csrf}
+    assert c.post("/api/users", json=NEW_USER, headers=ok).status_code == 201
     assert "alice" in env.helper.users
 
 
-def test_csrf_header_accepted_for_htmx(authed: tuple, env: Env) -> None:  # type: ignore[type-arg]
+def test_csrf_token_in_form_field_not_accepted(authed: tuple, env: Env) -> None:  # type: ignore[type-arg]
+    # Only a header is accepted, which a cross-site form cannot set.
     c, csrf = authed
-    r = c.post(
-        "/users",
-        data={"name": "bob", "password": "bob password 12", "password2": "bob password 12"},
-        headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
-    )
-    assert r.status_code == 303
+    r = c.post("/api/users", data={**NEW_USER, "csrf_token": csrf}, headers={"Origin": ORIGIN})
+    assert r.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -269,8 +281,7 @@ def test_csrf_header_accepted_for_htmx(authed: tuple, env: Env) -> None:  # type
     ],
 )
 def test_host_allowlist(env: Env, host: str, ok: bool) -> None:
-    c = env.make_client()
-    r = c.get("/login", headers={"Host": host})
+    r = env.make_client().get("/api/auth/status", headers={"Host": host})
     assert (r.status_code == 200) is ok
 
 
@@ -279,18 +290,16 @@ def test_host_allowlist(env: Env, host: str, ok: bool) -> None:
 
 def test_throttle_backoff_grows_and_caps() -> None:
     t = auth.LoginThrottle(max_entries=100, base=1.0, cap=900.0)
-    now = 1000.0
     delays = []
     for _ in range(15):
-        t.record_failure("1.2.3.4", now)
-        delays.append(t.retry_after("1.2.3.4", now))
+        t.record_failure("1.2.3.4", 1000.0)
+        delays.append(t.retry_after("1.2.3.4", 1000.0))
     assert delays[0] >= 1.0
     assert all(b >= a for a, b in itertools.pairwise(delays))
-    assert delays[4] >= 16.0
-    assert max(delays) == 900.0
-    assert t.retry_after("5.6.7.8", now) == 0.0
+    assert delays[4] >= 16.0 and max(delays) == 900.0
+    assert t.retry_after("5.6.7.8", 1000.0) == 0.0
     t.record_success("1.2.3.4")
-    assert t.retry_after("1.2.3.4", now) == 0.0
+    assert t.retry_after("1.2.3.4", 1000.0) == 0.0
 
 
 def test_throttle_memory_bounded() -> None:
@@ -300,55 +309,28 @@ def test_throttle_memory_bounded() -> None:
     assert len(t) <= 1000
 
 
-def test_login_throttled_over_http(env: Env) -> None:
+def test_login_throttled(env: Env) -> None:
     c = env.make_client(client=("192.168.68.50", 5000))
-    token = csrf_from(c.get("/login").text)
     for _ in range(3):
-        c.post(
-            "/login",
-            data={"password": "nope nope nope", "csrf_token": token},
-            headers={"Origin": ORIGIN},
-        )
-    r = c.post(
-        "/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": ORIGIN}
-    )
+        _login_raw(c, "nope nope nope")
+    r = _login_raw(c, PASSWORD)
     assert r.status_code == 429
     assert "ssm_session" not in r.cookies
 
 
 def test_xff_ignored_without_trusted_proxy(env: Env) -> None:
     c = env.make_client(client=("192.168.68.50", 5000))
-    token = csrf_from(c.get("/login").text)
     for i in range(3):
-        c.post(
-            "/login",
-            data={"password": "nope nope nope", "csrf_token": token},
-            headers={"Origin": ORIGIN, "X-Forwarded-For": f"10.9.9.{i}"},
-        )
-    r = c.post(
-        "/login",
-        data={"password": PASSWORD, "csrf_token": token},
-        headers={"Origin": ORIGIN, "X-Forwarded-For": "10.9.9.99"},
-    )
-    assert r.status_code == 429
+        _login_raw(c, "nope nope nope", xff=f"10.9.9.{i}")
+    assert _login_raw(c, PASSWORD, xff="10.9.9.99").status_code == 429
 
 
 def test_xff_honoured_from_trusted_proxy(env: Env) -> None:
     s = make_settings(env.tmp, env.volume, trusted_proxies=["192.168.68.2"])
     c = env.make_client(s, client=("192.168.68.2", 5000))
-    token = csrf_from(c.get("/login").text)
     for _ in range(3):
-        c.post(
-            "/login",
-            data={"password": "nope nope nope", "csrf_token": token},
-            headers={"Origin": ORIGIN, "X-Forwarded-For": "10.9.9.1"},
-        )
-    r = c.post(
-        "/login",
-        data={"password": PASSWORD, "csrf_token": token},
-        headers={"Origin": ORIGIN, "X-Forwarded-For": "10.9.9.2"},
-    )
-    assert r.status_code == 303
+        _login_raw(c, "nope nope nope", xff="10.9.9.1")
+    assert _login_raw(c, PASSWORD, xff="10.9.9.2").status_code == 200
 
 
 def test_client_ip_resolution() -> None:
@@ -366,12 +348,7 @@ def test_login_audit_events_never_contain_password(
     env: Env, capsys: pytest.CaptureFixture[str]
 ) -> None:
     c = env.make_client(client=("192.168.68.51", 1))
-    token = csrf_from(c.get("/login").text)
-    c.post(
-        "/login",
-        data={"password": "wrong secret 999", "csrf_token": token},
-        headers={"Origin": ORIGIN},
-    )
+    _login_raw(c, "wrong secret 999")
     env.clock.advance(3600)
     login(c)
     out = capsys.readouterr().out
