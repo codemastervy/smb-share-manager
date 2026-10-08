@@ -148,7 +148,9 @@ def test_import_users_then_share(imp: Path, env: Env) -> None:
     env.helper.import_users = ["isherveer", "jagdev"]
     c = env.make_client()
     csrf = login(c)
-    assert call(c, "POST", "/api/import/user", csrf, json={"username": "isherveer"}).status_code == 200
+    assert (
+        call(c, "POST", "/api/import/user", csrf, json={"username": "isherveer"}).status_code == 200
+    )
     assert "isherveer" in env.helper.users
     r = call(c, "POST", "/api/import/share", csrf, json={"name": "Isherveer"})
     assert r.status_code == 200, r.text
@@ -159,7 +161,9 @@ def test_import_user_not_in_scan_refused(imp: Path, env: Env) -> None:
     env.helper.import_users = ["isherveer"]
     c = env.make_client()
     csrf = login(c)
-    assert call(c, "POST", "/api/import/user", csrf, json={"username": "mallory"}).status_code == 400
+    assert (
+        call(c, "POST", "/api/import/user", csrf, json={"username": "mallory"}).status_code == 400
+    )
     assert "mallory" not in env.helper.users
 
 
