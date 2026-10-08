@@ -61,12 +61,12 @@ else
 fi
 
 # 4. Security headers present.
-headers=$(curl -fsSI --max-time 5 "$WEB_URL/login" 2>/dev/null | tr -d '\r')
+headers=$(curl -fsSI --max-time 5 "$WEB_URL/" 2>/dev/null | tr -d "\r")
 if grep -qi "^content-security-policy: default-src 'self'" <<<"$headers" \
    && grep -qi '^x-content-type-options: nosniff' <<<"$headers"; then
   ok "security headers present"
 else
-  fail "security headers missing on /login"
+  fail "security headers missing on the web UI"
 fi
 
 # 5. Samba configuration is valid.

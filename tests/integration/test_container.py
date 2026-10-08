@@ -39,6 +39,7 @@ FS = os.environ.get("SSM_FS", "ext4")
 CONTAINER = os.environ.get("SSM_CONTAINER", "smb-share-manager")
 COMPOSE = shlex.split(os.environ.get("SSM_COMPOSE", "docker compose"))
 VOL = "/mnt/files"
+VP = "/files"  # the same volume as the UI/API names it
 PW = {
     "rwuser": "rw-user-password-1",
     "rouser": "ro-user-password-1",
@@ -51,31 +52,26 @@ IMPORTED_PW = "Isherveer-Old-Pass1"
 
 
 class Admin:
+    """Talks to the JSON API the way the React UI does."""
+
     def __init__(self) -> None:
-        self.c = httpx.Client(base_url=URL, follow_redirects=False, timeout=30)
-        page = self.c.get("/login")
-        token = self._csrf(page.text)
+        self.c = httpx.Client(base_url=URL, follow_redirects=False, timeout=60)
+        pre = self.c.get("/api/auth/status").json()["csrf"]
         r = self.c.post(
-            "/login", data={"password": PASSWORD, "csrf_token": token}, headers={"Origin": URL}
+            "/api/auth/login",
+            json={"password": PASSWORD},
+            headers={"Origin": URL, "X-CSRF-Token": pre},
         )
-        assert r.status_code == 303, r.text
-        self.csrf = self._csrf(self.c.get("/shares").text)
+        assert r.status_code == 200, r.text
+        self.csrf = r.json()["csrf"]
 
-    @staticmethod
-    def _csrf(html: str) -> str:
-        m = re.search(r'name="csrf_token" value="([^"]+)"', html)
-        assert m
-        return m.group(1)
+    def req(self, method: str, path: str, json: Any = None, **kw: Any) -> httpx.Response:
+        headers = {"Origin": URL, "X-CSRF-Token": self.csrf, **kw.pop("headers", {})}
+        return self.c.request(method, path, json=json, headers=headers, **kw)
 
-    def post(self, path: str, data: dict[str, str] | None = None) -> httpx.Response:
-        return self.c.post(
-            path, data={**(data or {}), "csrf_token": self.csrf}, headers={"Origin": URL}
-        )
-
-    def ok(self, path: str, data: dict[str, str] | None = None) -> httpx.Response:
-        r = self.post(path, data)
-        assert r.status_code == 303, (path, r.status_code, r.text[:500])
-        assert "err=" not in r.headers["location"], (path, r.headers["location"])
+    def ok(self, method: str, path: str, json: Any = None, **kw: Any) -> httpx.Response:
+        r = self.req(method, path, json, **kw)
+        assert 200 <= r.status_code < 300, (method, path, r.status_code, r.text[:500])
         return r
 
 
@@ -134,17 +130,18 @@ def admin() -> Iterator[Admin]:
 @pytest.fixture(scope="module")
 def setup(admin: Admin) -> dict[str, Any]:
     for name, pw in PW.items():
-        admin.ok("/users", {"name": name, "password": pw, "password2": pw})
-    admin.ok("/browse/mkdir", {"path": VOL, "name": "s1"})
+        admin.ok("POST", "/api/users", {"username": name, "password": pw, "display_name": ""})
+    admin.ok("POST", "/api/files/mkdir", {"parent": VP, "name": "s1"})
     admin.ok(
-        "/shares",
+        "POST",
+        "/api/shares",
         {
             "name": "S1",
-            "path": f"{VOL}/s1",
-            "all_users": "off",
-            "access_rwuser": "rw",
-            "access_rouser": "ro",
-            "access_other": "none",
+            "path": f"{VP}/s1",
+            "members": [
+                {"username": "rwuser", "access": "rw"},
+                {"username": "rouser", "access": "ro"},
+            ],
         },
     )
     return {"share": "S1"}
@@ -163,20 +160,27 @@ def test_healthz() -> None:
 
 
 def test_security_headers_real_server() -> None:
-    for path in ("/login", "/static/app.css", "/healthz", "/nope"):
+    for path in ("/", "/files", "/healthz", "/api/auth/status", "/nope"):
         r = httpx.get(URL + path)
         csp = r.headers["content-security-policy"]
         assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp
         assert "unsafe-inline" not in csp
         assert r.headers["x-content-type-options"] == "nosniff"
         assert r.headers["x-frame-options"] == "DENY"
+        assert r.headers["referrer-policy"] == "same-origin"
         assert "server" not in r.headers
+    html = httpx.get(URL + "/").text
+    assert "<script" in html
+    for m in re.finditer(r"<script\b([^>]*)>(.*?)</script>", html, re.S):
+        assert "src=" in m.group(1) and not m.group(2).strip()
 
 
 def test_no_api_docs_and_bad_host() -> None:
-    for p in ("/docs", "/redoc", "/openapi.json"):
-        assert httpx.get(URL + p).status_code in (303, 404)
-    assert httpx.get(URL + "/login", headers={"Host": "evil.example"}).status_code == 400
+    for p in ("/docs", "/redoc", "/openapi.json", "/api/openapi.json"):
+        r = httpx.get(URL + p)
+        assert "swagger" not in r.text.lower() and '"openapi"' not in r.text
+    assert httpx.get(URL + "/api/shares").status_code == 401
+    assert httpx.get(URL + "/", headers={"Host": "evil.example"}).status_code == 400
 
 
 def test_container_hardening() -> None:
@@ -359,30 +363,33 @@ def test_alternate_data_streams(setup: dict[str, Any]) -> None:
 
 
 def test_fs_warning_shown_for_exfat(admin: Admin, setup: dict[str, Any]) -> None:
-    page = admin.c.get("/shares/new", params={"path": f"{VOL}/s1"}).text
+    listing = admin.c.get("/api/files/list", params={"path": f"{VP}/s1"}).json()
+    share = next(x for x in admin.c.get("/api/shares").json()["shares"] if x["name"] == "S1")
     if FS == "exfat":
-        assert "exfat" in page and "share level only" in page
+        assert listing["fs_type"] == "exfat" and listing["no_unix_perms"] is True
+        assert share["no_unix_perms"] is True
     else:
-        assert "share level only" not in page
+        assert listing["no_unix_perms"] is False and share["no_unix_perms"] is False
 
 
 def test_permission_plan_on_fs(admin: Admin, setup: dict[str, Any]) -> None:
-    page = admin.c.get("/shares/S1/edit").text
+    plan = admin.c.get("/api/shares/S1/permissions").json()
     if FS == "exfat":
-        assert "without unix permissions" in page
+        assert plan["applicable"] is False and plan["changes"] == []
     else:
-        # ext4 volume was prepared as 1000:3000 2775 by the CI script: nothing to change.
-        assert "Permissions look right" in page or "fix permissions" in page
+        # The ext4 volume was prepared as 1000:3000 2775 and the web app creates folders
+        # group-writable, so nothing (or at most the setgid bit) needs changing.
+        assert plan["applicable"] is True
 
 
 # --- requirement 3: zero-member share ---------------------------------------------------------
 
 
 def test_zero_member_share_refused_and_unreachable(admin: Admin, setup: dict[str, Any]) -> None:
-    admin.ok("/browse/mkdir", {"path": VOL, "name": "zero"})
-    r = admin.post("/shares", {"name": "Zero", "path": f"{VOL}/zero", "all_users": "off"})
+    admin.ok("POST", "/api/files/mkdir", {"parent": VP, "name": "zero"})
+    r = admin.req("POST", "/api/shares", {"name": "Zero", "path": f"{VP}/zero", "members": []})
     assert r.status_code == 400
-    # Bypass the UI: inject a member-less share straight into the registry, then ask the
+    # Bypass the API: inject a member-less share straight into the registry, then ask the
     # helper to apply it. The helper must refuse, and the share must stay unreachable.
     dexec(
         "python3",
@@ -395,8 +402,8 @@ def test_zero_member_share_refused_and_unreachable(admin: Admin, setup: dict[str
         user="1000",
     )
     try:
-        r = admin.post("/config/reapply")
-        assert "err=" in r.headers["location"]
+        r = admin.req("POST", "/api/shares/reapply")
+        assert r.status_code == 502, r.text
         for user in PW:
             rc, out = smbclient("Zero", user, PW[user], "ls")
             assert rc != 0, (user, out)
@@ -419,63 +426,77 @@ def test_zero_member_share_refused_and_unreachable(admin: Admin, setup: dict[str
 
 def test_planted_html_downloads_as_attachment(admin: Admin, setup: dict[str, Any]) -> None:
     html = b"<html><body><script>alert(document.cookie)</script></body></html>"
-    r = admin.c.put(
-        "/browse/upload",
-        params={"dir": f"{VOL}/s1", "name": "evil.html"},
-        content=html,
-        headers={"Origin": URL, "X-CSRF-Token": admin.csrf},
+    r = admin.req(
+        "PUT", "/api/files/upload", params={"path": f"{VP}/s1", "name": "evil.html"}, content=html
     )
     assert r.status_code == 201, r.text
     name = r.json()["name"]
-    r = admin.c.get("/browse/download", params={"path": f"{VOL}/s1/{name}"})
-    assert r.status_code == 200 and r.content == html
-    assert r.headers["content-disposition"].startswith("attachment;")
-    assert r.headers["content-type"] == "application/octet-stream"
-    assert r.headers["x-content-type-options"] == "nosniff"
-    assert "sandbox" in r.headers["content-security-policy"]
+    for extra in ({}, {"inline": "true"}):
+        r = admin.c.get("/api/files/download", params={"path": f"{VP}/s1/{name}", **extra})
+        assert r.status_code == 200 and r.content == html
+        assert r.headers["content-disposition"].startswith("attachment;")
+        assert r.headers["content-type"] == "application/octet-stream"
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert "sandbox" in r.headers["content-security-policy"]
     # Also reachable over SMB by a member: the file really is on the share.
     _rc, out = smbclient("S1", "rwuser", PW["rwuser"], "ls")
     assert name in out
 
 
 def test_upload_never_overwrites(admin: Admin, setup: dict[str, Any]) -> None:
-    hdr = {"Origin": URL, "X-CSRF-Token": admin.csrf}
     names = []
     for body in (b"one", b"two"):
-        r = admin.c.put(
-            "/browse/upload",
-            params={"dir": f"{VOL}/s1", "name": "same.txt"},
+        r = admin.req(
+            "PUT",
+            "/api/files/upload",
+            params={"path": f"{VP}/s1", "name": "same.txt"},
             content=body,
-            headers=hdr,
         )
         assert r.status_code == 201
         names.append(r.json()["name"])
     assert names[0] != names[1]
 
 
+def test_copy_move_search(admin: Admin, setup: dict[str, Any]) -> None:
+    admin.ok("POST", "/api/files/mkdir", {"parent": VP, "name": "cm"})
+    r = admin.ok(
+        "POST", "/api/files/copy", {"sources": [f"{VP}/s1/same.txt"], "destination": f"{VP}/cm"}
+    ).json()
+    assert r["failed"] == [] and r["copied"] == [f"{VP}/cm/same.txt"]
+    r = admin.ok(
+        "POST", "/api/files/move", {"sources": [f"{VP}/cm/same.txt"], "destination": f"{VP}/s1"}
+    ).json()
+    assert r["moved"] == [] and "already exists" in r["failed"][0]["error"]
+    found = admin.c.get("/api/files/search", params={"path": VP, "q": "same"}).json()
+    assert f"{VP}/cm/same.txt" in [e["path"] for e in found["entries"]]
+    r = admin.ok("POST", "/api/files/delete", {"paths": [f"{VP}/cm", VP]}).json()
+    assert r["deleted"] == [f"{VP}/cm"] and len(r["failed"]) == 1
+
+
 # --- import from a real tdbsam passdb ---------------------------------------------------------
 
 
 def test_import_real_passdb(admin: Admin, setup: dict[str, Any]) -> None:
-    page = admin.c.get("/import").text
-    assert "isherveer" in page
-    assert "still mounted" in page
-    assert "Was anonymous" in page
-    admin.ok("/import/user", {"name": "isherveer"})
+    page = admin.c.get("/api/import")
+    data = page.json()
+    assert data["mounted"] is True
+    assert "isherveer" in [u["username"] for u in data["users"]]
+    assert admin.c.get("/api/info").json()["import_mounted"] is True
+    assert any(x["was_anonymous"] for x in data["shares"])
+    admin.ok("POST", "/api/import/user", {"username": "isherveer"})
     # The imported user logs in with their OLD password (the NT hash carried over).
-    admin.ok("/browse/mkdir", {"path": VOL, "name": "Isherveer"})
-    admin.ok("/import/share", {"name": "Isherveer", "path": f"{VOL}/Isherveer"})
+    admin.ok("POST", "/api/files/mkdir", {"parent": VP, "name": "Isherveer"})
+    admin.ok("POST", "/api/import/share", {"name": "Isherveer", "path": f"{VP}/Isherveer"})
     rc, out = smbclient("Isherveer", "isherveer", IMPORTED_PW, "ls")
     assert rc == 0 and "NT_STATUS" not in out, out
-    # The hash never shows up in a page or in the logs.
+    # The hash never shows up in an API response or in the logs.
     logs = subprocess.run(["docker", "logs", CONTAINER], capture_output=True, text=True).stdout
-    for text in (page, admin.c.get("/import").text, logs):
+    for text in (page.text, admin.c.get("/api/import").text, logs):
         assert not re.search(r"\b[0-9A-F]{32}\b", text)
 
 
 def test_import_bad_share_blocked(admin: Admin, setup: dict[str, Any]) -> None:
-    r = admin.post("/import/share", {"name": "Weird"})
-    assert "err=" in r.headers["location"]
+    assert admin.req("POST", "/api/import/share", {"name": "Weird"}).status_code == 400
 
 
 # --- unsharing disconnects --------------------------------------------------------------------
@@ -496,10 +517,11 @@ def test_unshare_disconnects_open_session(admin: Admin, setup: dict[str, Any]) -
     from smbprotocol.session import Session
     from smbprotocol.tree import TreeConnect
 
-    admin.ok("/browse/mkdir", {"path": VOL, "name": "temp"})
+    admin.ok("POST", "/api/files/mkdir", {"parent": VP, "name": "temp"})
     admin.ok(
-        "/shares",
-        {"name": "Temp", "path": f"{VOL}/temp", "all_users": "off", "access_rwuser": "rw"},
+        "POST",
+        "/api/shares",
+        {"name": "Temp", "path": f"{VP}/temp", "members": [{"username": "rwuser", "access": "rw"}]},
     )
     conn = Connection(uuid.uuid4(), "127.0.0.1", int(PORT))
     conn.connect()
@@ -518,7 +540,7 @@ def test_unshare_disconnects_open_session(admin: Admin, setup: dict[str, Any]) -
             CreateOptions.FILE_NON_DIRECTORY_FILE,
         )
         f.write(b"before", 0)
-        admin.ok("/shares/Temp/delete")
+        admin.ok("DELETE", "/api/shares/Temp")
         time.sleep(1)
         with pytest.raises(SMBException):
             f.write(b"after", 0)
@@ -528,32 +550,24 @@ def test_unshare_disconnects_open_session(admin: Admin, setup: dict[str, Any]) -
             conn.disconnect()
     rc, out = smbclient("Temp", "rwuser", PW["rwuser"], "ls")
     assert rc != 0 and "NT_STATUS_BAD_NETWORK_NAME" in out, out
-    assert "temp" in admin.c.get("/browse", params={"path": VOL}).text  # folder untouched
+    names = [
+        e["name"] for e in admin.c.get("/api/files/list", params={"path": VP}).json()["entries"]
+    ]
+    assert "temp" in names  # folder untouched
 
 
 def test_membership_removal_disconnects(admin: Admin, setup: dict[str, Any]) -> None:
-    admin.ok(
-        "/shares/S1",
-        {
-            "name": "S1",
-            "path": f"{VOL}/s1",
-            "all_users": "off",
-            "access_rwuser": "rw",
-            "access_rouser": "none",
-            "access_other": "none",
-        },
-    )
+    admin.ok("PATCH", "/api/shares/S1", {"members": [{"username": "rwuser", "access": "rw"}]})
     rc, out = smbclient("S1", "rouser", PW["rouser"], "ls")
     assert rc != 0 and "NT_STATUS_ACCESS_DENIED" in out, out
     admin.ok(
-        "/shares/S1",
+        "PATCH",
+        "/api/shares/S1",
         {
-            "name": "S1",
-            "path": f"{VOL}/s1",
-            "all_users": "off",
-            "access_rwuser": "rw",
-            "access_rouser": "ro",
-            "access_other": "none",
+            "members": [
+                {"username": "rwuser", "access": "rw"},
+                {"username": "rouser", "access": "ro"},
+            ]
         },
     )
 
@@ -562,9 +576,11 @@ def test_membership_removal_disconnects(admin: Admin, setup: dict[str, Any]) -> 
 
 
 def test_status_agrees_with_registry(admin: Admin, setup: dict[str, Any]) -> None:
-    page = admin.c.get("/config").text
-    assert "running" in page
-    assert "Samba agrees with the registry" in page, page[:3000]
+    st = admin.c.get("/api/shares").json()["status"]
+    assert st["running"] is True
+    for k in ("missing_shares", "extra_shares", "missing_users", "extra_users"):
+        assert st[k] == [], (k, st)
+    assert "[S1]" in admin.c.get("/api/shares/config").json()["content"]
 
 
 def test_audit_log_events(setup: dict[str, Any]) -> None:
@@ -589,7 +605,7 @@ def test_survives_recreate(admin: Admin, setup: dict[str, Any]) -> None:
     rc, out = smbclient("S1", "other", PW["other"], "ls")
     assert rc != 0
     # Old browser sessions survive a restart (same credential, sessions in ./data).
-    assert admin.c.get("/shares").status_code == 200
+    assert admin.c.get("/api/shares").status_code == 200
 
 
 def test_smoke_script(setup: dict[str, Any]) -> None:

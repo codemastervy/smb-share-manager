@@ -13,3 +13,4 @@ import/
 
 frontend/node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
