@@ -19,7 +19,8 @@ pytestmark = pytest.mark.integration
 URL = os.environ.get("SSM_URL", "")
 if not URL:
     pytest.skip("integration environment not configured", allow_module_level=True)
-sync_api = pytest.importorskip("playwright.sync_api")
+# Not skipped silently in CI: the browser test is part of the required checks.
+from playwright import sync_api  # noqa: E402
 
 PASSWORD = os.environ["SSM_PASSWORD"]
 PORT = os.environ.get("SSM_SMB_PORT", "445")
