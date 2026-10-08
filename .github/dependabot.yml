@@ -23,6 +23,11 @@ updates:
     directory: /docker
     schedule:
       interval: weekly
+    ignore:
+      # Odd-numbered Node majors are never LTS. Move to the next LTS (26, 28, ...) by hand;
+      # minor/patch and digest updates still arrive automatically.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
     groups:
       docker-minor-patch:
         update-types: [minor, patch]

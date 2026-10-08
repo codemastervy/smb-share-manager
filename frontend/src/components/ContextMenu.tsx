@@ -78,7 +78,7 @@ function Fragmentish({ separator, children }: { separator?: boolean; children: R
 
 /** Wires up right-click and long-press to the same handler. */
 export function useLongPress(onTrigger: (x: number, y: number) => void) {
-  const timer = useRef<number>()
+  const timer = useRef<number | undefined>(undefined)
   const origin = useRef({ x: 0, y: 0 })
 
   const cancel = () => { window.clearTimeout(timer.current) }
