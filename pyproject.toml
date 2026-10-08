@@ -27,6 +27,7 @@ dev = [
     "mypy",
     "bandit",
     "pip-audit",
+    "playwright>=1.63.0",
 ]
 
 [build-system]
