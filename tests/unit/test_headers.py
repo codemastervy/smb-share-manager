@@ -43,8 +43,14 @@ def test_app_csp_is_strict(env: Env) -> None:
 def test_headers_authenticated_api(env: Env) -> None:
     c = env.make_client()
     login(c)
-    for url in ["/api/shares", "/api/users", "/api/files/volumes", "/api/info", "/api/import",
-                "/api/nope"]:
+    for url in [
+        "/api/shares",
+        "/api/users",
+        "/api/files/volumes",
+        "/api/info",
+        "/api/import",
+        "/api/nope",
+    ]:
         assert_security_headers(c.get(url).headers)
 
 

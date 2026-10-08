@@ -34,6 +34,8 @@ class Settings:
     version: str = "dev"
     build_date: str = "unknown"
     import_dir: str = "/import"
+    frontend_dir: str = "/opt/app/frontend"
+    server_name: str = "NAS"
 
     def check(self) -> None:
         if not self.admin_password and not self.admin_password_hash:
@@ -86,6 +88,8 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         version=env.get("APP_VERSION", "dev"),
         build_date=env.get("BUILD_DATE", "unknown"),
         import_dir=env.get("IMPORT_DIR", "/import"),
+        frontend_dir=env.get("FRONTEND_DIR", "/opt/app/frontend"),
+        server_name=env.get("SMB_SERVER_NAME", "NAS"),
     )
     s.check()
     return s

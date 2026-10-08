@@ -65,7 +65,20 @@ class Registry:
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.execute("PRAGMA synchronous = FULL")
         self._db.executescript(SCHEMA)
+        self._migrate()
         os.chmod(path, 0o600)
+
+    def _migrate(self) -> None:
+        """Additive, backwards-compatible schema changes only (rollbacks must keep working)."""
+        with self._lock:
+            ucols = {r[1] for r in self._db.execute("PRAGMA table_info(users)")}
+            if "display_name" not in ucols:
+                self._db.execute(
+                    "ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+                )
+            scols = {r[1] for r in self._db.execute("PRAGMA table_info(shares)")}
+            if "created" not in scols:
+                self._db.execute("ALTER TABLE shares ADD COLUMN created REAL NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         self._db.close()
@@ -81,10 +94,29 @@ class Registry:
             r = self._db.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone()
         return r is not None
 
-    def add_user(self, name: str, now: float) -> None:
+    def user_details(self) -> list[tuple[str, str, float]]:
+        """[(name, display_name, created)] ordered by name."""
+        with self._lock:
+            return [
+                (r[0], r[1], r[2])
+                for r in self._db.execute(
+                    "SELECT name, display_name, created FROM users ORDER BY name"
+                )
+            ]
+
+    def set_display_name(self, name: str, display_name: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE users SET display_name = ? WHERE name = ?", (display_name, name)
+            )
+
+    def add_user(self, name: str, now: float, display_name: str = "") -> None:
         with self._lock:
             try:
-                self._db.execute("INSERT INTO users (name, created) VALUES (?, ?)", (name, now))
+                self._db.execute(
+                    "INSERT INTO users (name, created, display_name) VALUES (?, ?, ?)",
+                    (name, now, display_name),
+                )
             except sqlite3.IntegrityError as e:
                 raise RegistryError(f"user {name!r} already exists") from e
 
@@ -131,13 +163,24 @@ class Registry:
                 return s
         return None
 
-    def save_share(self, spec: ShareSpec, old_name: str | None = None) -> None:
+    def share_created(self) -> dict[str, float]:
+        with self._lock:
+            return {r[0]: r[1] for r in self._db.execute("SELECT name, created FROM shares")}
+
+    def save_share(
+        self, spec: ShareSpec, old_name: str | None = None, created: float = 0.0
+    ) -> None:
         """Insert or replace a share and its members in one transaction."""
         with self._lock:
             cur = self._db.cursor()
             cur.execute("BEGIN IMMEDIATE")
             try:
                 if old_name is not None:
+                    row = cur.execute(
+                        "SELECT created FROM shares WHERE name = ?", (old_name,)
+                    ).fetchone()
+                    if row and not created:
+                        created = row[0]
                     cur.execute("DELETE FROM shares WHERE name = ?", (old_name,))
                 existing = cur.execute(
                     "SELECT name FROM shares WHERE name = ?", (spec.name,)
@@ -145,9 +188,16 @@ class Registry:
                 if existing is not None:
                     raise RegistryError(f"a share named {spec.name!r} already exists")
                 cur.execute(
-                    "INSERT INTO shares (name, path, comment, all_users, no_unix_perms) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (spec.name, spec.path, spec.comment, spec.all_users, int(spec.no_unix_perms)),
+                    "INSERT INTO shares (name, path, comment, all_users, no_unix_perms, created) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        spec.name,
+                        spec.path,
+                        spec.comment,
+                        spec.all_users,
+                        int(spec.no_unix_perms),
+                        created,
+                    ),
                 )
                 for user, access in spec.members.items():
                     cur.execute(

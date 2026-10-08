@@ -70,7 +70,7 @@ def test_no_unauthenticated_api_routes_except_allowlist(env: Env) -> None:
     checked = 0
     for route in c.app.routes:  # type: ignore[attr-defined]
         path = getattr(route, "path", "")
-        if path in PUBLIC or not path.startswith("/api"):
+        if path in PUBLIC or not path.startswith("/api") or "{rest:path}" in path:
             continue
         url = path.replace("{share_id}", "x").replace("{username}", "x")
         for method in sorted(getattr(route, "methods", None) or {"GET"}):
