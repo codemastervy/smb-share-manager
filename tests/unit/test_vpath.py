@@ -30,8 +30,19 @@ def test_roundtrip(vm: VolumeMap, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "bad",
-    ["", "/", "files", "/nope", "/files/../media", "/files/./x", "/files//x", "/files/x/",
-     "/files/a\nb", "/files/\x00", "/../etc/passwd"],
+    [
+        "",
+        "/",
+        "files",
+        "/nope",
+        "/files/../media",
+        "/files/./x",
+        "/files//x",
+        "/files/x/",
+        "/files/a\nb",
+        "/files/\x00",
+        "/../etc/passwd",
+    ],
 )
 def test_bad_virtual_paths(vm: VolumeMap, bad: str) -> None:
     with pytest.raises(VPathError):
