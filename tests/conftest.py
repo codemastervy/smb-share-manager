@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +14,10 @@ from tests.fakes import FakeHelper
 
 PASSWORD = "correct horse battery"
 ORIGIN = "http://testserver"
+INDEX_HTML = (
+    '<!doctype html><html><head><script type="module" src="/assets/index-abc.js"></script>'
+    "</head><body><div id=root></div></body></html>"
+)
 
 
 class Clock:
@@ -53,6 +56,8 @@ def make_settings(tmp: Path, volume: Path, **overrides: Any) -> Settings:
         "version": "test",
         "build_date": "2026-10-08",
         "import_dir": str(tmp / "import"),
+        "frontend_dir": str(tmp / "dist"),
+        "server_name": "NAS",
     }
     base.update(overrides)
     return Settings(**base)
@@ -63,6 +68,10 @@ def env(tmp_path: Path) -> Iterator[Env]:
     volume = tmp_path / "files"
     volume.mkdir()
     (tmp_path / "data").mkdir()
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(INDEX_HTML)
+    (dist / "assets" / "index-abc.js").write_text("console.log('app')")
     clock = Clock()
     helper = FakeHelper()
     settings = make_settings(tmp_path, volume)
@@ -75,29 +84,27 @@ def env(tmp_path: Path) -> Iterator[Env]:
     yield Env(tmp_path, volume, clock, helper, settings, make_client)
 
 
-def csrf_from(html: str) -> str:
-    m = re.search(r'name="csrf_token" value="([^"]+)"', html) or re.search(
-        r'name="csrf-token" content="([^"]+)"', html
-    )
-    assert m, "no csrf token in page"
-    return m.group(1)
+def prelogin(client: TestClient) -> str:
+    r = client.get("/api/auth/status")
+    assert r.status_code == 200
+    return str(r.json()["csrf"])
 
 
 def login(client: TestClient, password: str = PASSWORD) -> str:
-    """Log in and return the session CSRF token."""
-    page = client.get("/login")
-    token = csrf_from(page.text)
+    """Log in like the SPA does and return the session CSRF token."""
+    pre = prelogin(client)
     r = client.post(
-        "/login",
-        data={"password": password, "csrf_token": token},
-        headers={"Origin": ORIGIN},
+        "/api/auth/login",
+        json={"password": password},
+        headers={"Origin": ORIGIN, "X-CSRF-Token": pre},
     )
-    assert r.status_code == 303, r.text
-    return csrf_from(client.get("/shares").text)
+    assert r.status_code == 200, r.text
+    return str(r.json()["csrf"])
 
 
-def post(client: TestClient, url: str, csrf: str, data: dict[str, Any] | None = None) -> Any:
-    return client.post(url, data={**(data or {}), "csrf_token": csrf}, headers={"Origin": ORIGIN})
+def call(client: TestClient, method: str, url: str, csrf: str, **kw: Any) -> Any:
+    headers = {"Origin": ORIGIN, "X-CSRF-Token": csrf, **kw.pop("headers", {})}
+    return client.request(method, url, headers=headers, **kw)
 
 
 @pytest.fixture
