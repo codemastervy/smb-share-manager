@@ -18,15 +18,25 @@ def events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
 
 
 def mk_user(c: TestClient, csrf: str, name: str = "alice") -> None:
-    r = call(c, "POST", "/api/users", csrf,
-             json={"username": name, "password": PW, "display_name": name.title()})
+    r = call(
+        c,
+        "POST",
+        "/api/users",
+        csrf,
+        json={"username": name, "password": PW, "display_name": name.title()},
+    )
     assert r.status_code == 201, r.text
 
 
 def mk_share(c: TestClient, csrf: str, env: Env, **kw: Any) -> Any:
     (env.volume / "Photos").mkdir(exist_ok=True)
-    body = {"name": "Photos", "path": "/files/Photos", "comment": "",
-            "all_users": None, "members": [{"username": "alice", "access": "rw"}]}
+    body = {
+        "name": "Photos",
+        "path": "/files/Photos",
+        "comment": "",
+        "all_users": None,
+        "members": [{"username": "alice", "access": "rw"}],
+    }
     body.update(kw)
     return call(c, "POST", "/api/shares", csrf, json=body)
 
@@ -49,8 +59,13 @@ def test_share_lifecycle_and_audit(env: Env, capsys: pytest.CaptureFixture[str])
     assert [s["name"] for s in listing["shares"]] == ["Photos"]
     assert listing["status"]["running"] is True
 
-    r = call(c, "PATCH", "/api/shares/Photos", csrf,
-             json={"members": [{"username": "alice", "access": "ro"}], "comment": "Pics"})
+    r = call(
+        c,
+        "PATCH",
+        "/api/shares/Photos",
+        csrf,
+        json={"members": [{"username": "alice", "access": "ro"}], "comment": "Pics"},
+    )
     assert r.status_code == 200, r.text
     assert env.helper.shares[0].members == {"alice": "ro"}
     assert env.helper.shares[0].comment == "Pics"
@@ -155,12 +170,22 @@ def test_permissions_require_explicit_confirmation(env: Env) -> None:
     plan = c.get("/api/shares/Photos/permissions").json()
     assert "changes" in plan and "before" in plan
     assert not [x for x in env.helper.calls if x[0] == "perm_apply"]
-    r = call(c, "POST", "/api/shares/Photos/permissions", csrf,
-             json={"fix_permissions": False, "before": plan["before"]})
+    r = call(
+        c,
+        "POST",
+        "/api/shares/Photos/permissions",
+        csrf,
+        json={"fix_permissions": False, "before": plan["before"]},
+    )
     assert r.status_code == 400
     assert not [x for x in env.helper.calls if x[0] == "perm_apply"]
-    r = call(c, "POST", "/api/shares/Photos/permissions", csrf,
-             json={"fix_permissions": True, "before": plan["before"]})
+    r = call(
+        c,
+        "POST",
+        "/api/shares/Photos/permissions",
+        csrf,
+        json={"fix_permissions": True, "before": plan["before"]},
+    )
     assert r.status_code == 200
     applied = [x for x in env.helper.calls if x[0] == "perm_apply"]
     assert applied[0][1]["expected_before"] == plan["before"]
@@ -186,7 +211,9 @@ def test_set_password_failure_rolls_back_user(env: Env) -> None:
     c = env.make_client()
     csrf = login(c)
     env.helper.fail_next = "user_set_password"
-    r = call(c, "POST", "/api/users", csrf, json={"username": "bob", "password": PW, "display_name": ""})
+    r = call(
+        c, "POST", "/api/users", csrf, json={"username": "bob", "password": PW, "display_name": ""}
+    )
     assert r.status_code == 502
     assert "bob" not in env.helper.users
     assert c.get("/api/users").json()["users"] == []
@@ -196,8 +223,13 @@ def test_update_user(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
     c = env.make_client()
     csrf = login(c)
     mk_user(c, csrf)
-    r = call(c, "PATCH", "/api/users/alice", csrf,
-             json={"display_name": "Alice B", "password": "new password 99"})
+    r = call(
+        c,
+        "PATCH",
+        "/api/users/alice",
+        csrf,
+        json={"display_name": "Alice B", "password": "new password 99"},
+    )
     assert r.status_code == 200
     assert env.helper.users["alice"] == "new password 99"
     users = c.get("/api/users").json()["users"]
@@ -220,8 +252,12 @@ def test_delete_user_removes_membership(env: Env) -> None:
     csrf = login(c)
     mk_user(c, csrf)
     mk_user(c, csrf, "bob")
-    mk_share(c, csrf, env, members=[{"username": "alice", "access": "rw"},
-                                    {"username": "bob", "access": "ro"}])
+    mk_share(
+        c,
+        csrf,
+        env,
+        members=[{"username": "alice", "access": "rw"}, {"username": "bob", "access": "ro"}],
+    )
     r = call(c, "DELETE", "/api/users/bob", csrf)
     assert r.status_code == 200 and r.json()["removed_from_shares"] == ["Photos"]
     assert env.helper.shares[0].members == {"alice": "rw"}
@@ -238,10 +274,16 @@ def test_volumes_and_list(env: Env) -> None:
     login(c)
     vols = c.get("/api/files/volumes").json()["volumes"]
     assert vols[0]["name"] == "files" and vols[0]["path"] == "/files"
-    names = [e["name"] for e in c.get("/api/files/list", params={"path": "/files"}).json()["entries"]]
+    names = [
+        e["name"] for e in c.get("/api/files/list", params={"path": "/files"}).json()["entries"]
+    ]
     assert names == ["a.txt"]
-    names = [e["name"] for e in c.get("/api/files/list",
-             params={"path": "/files", "show_hidden": "true"}).json()["entries"]]
+    names = [
+        e["name"]
+        for e in c.get("/api/files/list", params={"path": "/files", "show_hidden": "true"}).json()[
+            "entries"
+        ]
+    ]
     assert ".hidden" in names
 
 
@@ -256,17 +298,42 @@ def test_paths_outside_refused(env: Env, p: str) -> None:
 def test_file_ops_and_audit(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
     c = env.make_client()
     csrf = login(c)
-    assert call(c, "POST", "/api/files/mkdir", csrf, json={"parent": "/files", "name": "New"}).status_code == 200
+    assert (
+        call(
+            c, "POST", "/api/files/mkdir", csrf, json={"parent": "/files", "name": "New"}
+        ).status_code
+        == 200
+    )
     assert (env.volume / "New").is_dir()
-    r = call(c, "POST", "/api/files/rename", csrf, json={"path": "/files/New", "new_name": "Renamed"})
+    r = call(
+        c, "POST", "/api/files/rename", csrf, json={"path": "/files/New", "new_name": "Renamed"}
+    )
     assert r.status_code == 200 and r.json()["path"] == "/files/Renamed"
     (env.volume / "Renamed" / "f.txt").write_text("F")
     (env.volume / "Dest").mkdir()
-    r = call(c, "POST", "/api/files/copy", csrf, json={"sources": ["/files/Renamed/f.txt"], "destination": "/files/Dest"})
+    r = call(
+        c,
+        "POST",
+        "/api/files/copy",
+        csrf,
+        json={"sources": ["/files/Renamed/f.txt"], "destination": "/files/Dest"},
+    )
     assert r.json()["failed"] == [] and (env.volume / "Dest" / "f.txt").read_text() == "F"
-    r = call(c, "POST", "/api/files/copy", csrf, json={"sources": ["/files/Renamed/f.txt"], "destination": "/files/Dest"})
+    r = call(
+        c,
+        "POST",
+        "/api/files/copy",
+        csrf,
+        json={"sources": ["/files/Renamed/f.txt"], "destination": "/files/Dest"},
+    )
     assert (env.volume / "Dest" / "f (1).txt").exists()
-    r = call(c, "POST", "/api/files/move", csrf, json={"sources": ["/files/Renamed/f.txt"], "destination": "/files/Dest"})
+    r = call(
+        c,
+        "POST",
+        "/api/files/move",
+        csrf,
+        json={"sources": ["/files/Renamed/f.txt"], "destination": "/files/Dest"},
+    )
     assert r.json()["failed"][0]["error"].endswith("already exists in the destination")
     assert (env.volume / "Renamed" / "f.txt").exists()
     r = call(c, "POST", "/api/files/delete", csrf, json={"paths": ["/files/Renamed", "/files"]})
@@ -295,7 +362,13 @@ def test_shared_folder_delete_and_move_refused(env: Env) -> None:
     (env.volume / "Dest").mkdir()
     r = call(c, "POST", "/api/files/delete", csrf, json={"paths": ["/files/Photos"]})
     assert r.json()["deleted"] == []
-    r = call(c, "POST", "/api/files/move", csrf, json={"sources": ["/files/Photos"], "destination": "/files/Dest"})
+    r = call(
+        c,
+        "POST",
+        "/api/files/move",
+        csrf,
+        json={"sources": ["/files/Photos"], "destination": "/files/Dest"},
+    )
     assert r.json()["moved"] == []
     assert (env.volume / "Photos").is_dir()
 
@@ -304,7 +377,14 @@ def test_upload(env: Env) -> None:
     c = env.make_client()
     csrf = login(c)
     (env.volume / "a.txt").write_text("orig")
-    r = call(c, "PUT", "/api/files/upload", csrf, params={"path": "/files", "name": "a.txt"}, content=b"new")
+    r = call(
+        c,
+        "PUT",
+        "/api/files/upload",
+        csrf,
+        params={"path": "/files", "name": "a.txt"},
+        content=b"new",
+    )
     assert r.status_code == 201 and r.json()["name"] == "a (1).txt"
     assert r.json()["path"] == "/files/a (1).txt"
     assert (env.volume / "a.txt").read_text() == "orig"
@@ -313,8 +393,12 @@ def test_upload(env: Env) -> None:
 def test_upload_requires_csrf_header(env: Env) -> None:
     c = env.make_client()
     login(c)
-    r = c.put("/api/files/upload", params={"path": "/files", "name": "x.txt"},
-              content=b"x", headers={"Origin": ORIGIN})
+    r = c.put(
+        "/api/files/upload",
+        params={"path": "/files", "name": "x.txt"},
+        content=b"x",
+        headers={"Origin": ORIGIN},
+    )
     assert r.status_code == 403
     assert not (env.volume / "x.txt").exists()
 
@@ -323,7 +407,9 @@ def test_upload_size_limit(env: Env) -> None:
     c = env.make_client()
     csrf = login(c)
     big = b"x" * (env.settings.max_upload_bytes + 1)
-    r = call(c, "PUT", "/api/files/upload", csrf, params={"path": "/files", "name": "big"}, content=big)
+    r = call(
+        c, "PUT", "/api/files/upload", csrf, params={"path": "/files", "name": "big"}, content=big
+    )
     assert r.status_code == 413
     assert list(env.volume.iterdir()) == []
 
@@ -331,6 +417,13 @@ def test_upload_size_limit(env: Env) -> None:
         for _ in range(3):
             yield b"x" * (env.settings.max_upload_bytes // 2)
 
-    r = call(c, "PUT", "/api/files/upload", csrf, params={"path": "/files", "name": "big2"}, content=gen())
+    r = call(
+        c,
+        "PUT",
+        "/api/files/upload",
+        csrf,
+        params={"path": "/files", "name": "big2"},
+        content=gen(),
+    )
     assert r.status_code == 413
     assert list(env.volume.iterdir()) == []

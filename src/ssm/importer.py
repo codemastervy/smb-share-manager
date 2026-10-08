@@ -17,17 +17,9 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import Response
-
-from ssm import audit, fsinfo
 from ssm import validators as v
-from ssm.helper_client import Helper, HelperError
 from ssm.models import ShareSpec
-from ssm.registry import Registry, RegistryError, SessionRow
-from ssm.settings import Settings
 
 SKIP_SECTIONS = frozenset({"global", "globals", "homes", "printers", "print$"})
 MAX_INCLUDE_DEPTH = 5
@@ -215,95 +207,3 @@ def check_problems(share: ImportedShare, volumes: list[str], path: str) -> list[
     except v.ValidationError as e:
         problems.append(str(e))
     return problems
-
-
-def register_routes(
-    app: FastAPI,
-    *,
-    settings: Settings,
-    registry: Registry,
-    helper: Helper,
-    volumes: list[str],
-    render: Callable[..., Response],
-    back: Callable[..., Response],
-    require_read: Callable[..., Any],
-    require_write: Callable[..., Any],
-    form_dict: Callable[..., Any],
-    apply: Callable[[list[ShareSpec]], None],
-    clock: Callable[[], float],
-) -> None:
-    @app.get("/import")
-    async def import_page(request: Request, s: SessionRow = Depends(require_read)) -> Response:
-        ctx: dict[str, Any] = {
-            "shares": [],
-            "existing_shares": {x.name.lower() for x in registry.list_shares()},
-            "existing_users": set(registry.list_users()),
-            "users": [],
-            "mounted": os.path.isdir(settings.import_dir),
-        }
-        if ctx["mounted"]:
-            try:
-                scan = helper.import_scan()
-                ctx["users"] = scan.get("users", [])
-                ctx["users_error"] = scan.get("users_error", "")
-                ctx["shares"] = shares_from_sections(scan.get("sections"), volumes)
-            except HelperError as e:
-                ctx["users_error"] = str(e)
-        return render(request, "import.html", ctx, session=s)
-
-    @app.post("/import/user")
-    async def import_user(request: Request, s: SessionRow = Depends(require_write)) -> Response:
-        form = await form_dict(request)
-        try:
-            name = v.validate_username(form.get("name", ""))
-            if registry.has_user(name):
-                raise v.ValidationError(f"user {name!r} already exists")
-            if name not in helper.import_scan().get("users", []):
-                raise v.ValidationError(f"user {name!r} is not in the imported passdb")
-            helper.import_user(name)
-            registry.add_user(name, clock())
-        except (v.ValidationError, HelperError, RegistryError) as e:
-            return back("/import", err=str(e))
-        audit.event("user_imported", user=name)
-        return back("/import", msg=f"User {name} imported with their old password.")
-
-    @app.post("/import/share")
-    async def import_share(request: Request, s: SessionRow = Depends(require_write)) -> Response:
-        form = await form_dict(request)
-        name = form.get("name", "")
-        try:
-            sections = helper.import_scan().get("sections")
-        except HelperError as e:
-            return back("/import", err=str(e))
-        found = {x.name: x for x in shares_from_sections(sections, volumes)}.get(name)
-        if found is None:
-            return back("/import", err="That share is not in the imported configuration.")
-        path = form.get("path") or found.path
-        problems = check_problems(found, volumes, path)
-        if problems:
-            return back("/import", err=f"{name}: " + "; ".join(problems))
-        if found.was_anonymous and form.get("ack_anonymous") != "yes":
-            return back(
-                "/import",
-                err=f"{name} was open without a password. Tick the box to confirm it will "
-                "now require an SMB login.",
-            )
-        try:
-            spec = v.validate_share(found.to_spec(path), volumes, registry.list_users())
-            spec = ShareSpec(
-                **{**spec.to_dict(), "no_unix_perms": fsinfo.lacks_unix_perms(spec.path)}
-            )
-            if registry.get_share(spec.name):
-                raise v.ValidationError(f"a share named {spec.name!r} already exists")
-            apply([*registry.list_shares(), spec])
-            registry.save_share(spec)
-        except (v.ValidationError, HelperError, RegistryError) as e:
-            return back("/import", err=f"{name}: {e}")
-        audit.event(
-            "share_imported",
-            share=spec.name,
-            path=spec.path,
-            members=spec.members,
-            all_users=spec.all_users,
-        )
-        return back("/import", msg=f"Share {spec.name} imported.")

@@ -23,7 +23,9 @@ SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
     (b"content-security-policy", CSP.encode()),
     (b"x-content-type-options", b"nosniff"),
     (b"x-frame-options", b"DENY"),
-    (b"referrer-policy", b"no-referrer"),
+    # same-origin, not no-referrer: with no-referrer browsers send "Origin: null" on POSTs,
+    # which the CSRF Origin check (correctly) rejects. Nothing leaks cross-site.
+    (b"referrer-policy", b"same-origin"),
     (b"cross-origin-opener-policy", b"same-origin"),
     (b"cross-origin-resource-policy", b"same-origin"),
     (b"permissions-policy", b"camera=(), microphone=(), geolocation=(), interest-cohort=()"),
