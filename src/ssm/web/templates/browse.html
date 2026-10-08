@@ -58,7 +58,7 @@
     <input name="name" required placeholder="new folder name">
     <button type="submit">Create folder</button>
   </form>
-  <form class="row upload" data-dir="{{ path }}" data-max-mb="{{ max_upload_mb }}">
+  <form class="row upload" hx-boost="false" data-dir="{{ path }}" data-max-mb="{{ max_upload_mb }}">
     <input type="file" name="file" required multiple>
     <button type="submit">Upload</button>
     <small class="upload-status">Max {{ max_upload_mb }} MB per file. Existing files are never replaced.</small>

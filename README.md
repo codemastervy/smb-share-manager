@@ -33,6 +33,30 @@ How it works:
 SECURITY.md describes the threat model and docs/UPDATING.md describes automatic updates.
 
 
+Screenshots
+-----------
+
+Sample data, taken from a local demo build. The real "Config & status" page shows the
+live output of testparm.
+
+Shares, with the exFAT note on each folder:
+
+![Shares](docs/screenshots/02-shares.png)
+
+New share, opened from "Share this folder" in the folder browser:
+
+![New share](docs/screenshots/03-new-share.png)
+
+Folder browser (list, new folder, rename, delete, upload, download):
+
+![Folders](docs/screenshots/06-folders.png)
+
+More: [login](docs/screenshots/01-login.png),
+[edit share](docs/screenshots/04-edit-share.png),
+[SMB users](docs/screenshots/05-users.png),
+[config & status](docs/screenshots/07-config-status.png).
+
+
 Requirements
 ------------
 

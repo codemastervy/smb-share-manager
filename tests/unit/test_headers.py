@@ -21,7 +21,8 @@ def assert_security_headers(h: object) -> None:
     assert "script-src 'self'" in csp
     assert headers["x-content-type-options"] == "nosniff"
     assert headers["x-frame-options"] == "DENY"
-    assert headers["referrer-policy"] == "no-referrer"
+    # Must not be no-referrer: browsers then send "Origin: null" and every POST fails.
+    assert headers["referrer-policy"] == "same-origin"
     assert headers["cross-origin-opener-policy"] == "same-origin"
     assert "permissions-policy" in headers
     assert "server" not in headers or "uvicorn" not in headers["server"].lower()
