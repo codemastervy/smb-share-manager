@@ -24,6 +24,7 @@ env:
 
 jobs:
   lint-unit:
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -59,7 +60,7 @@ jobs:
         run: uv run pytest -q -W ignore::DeprecationWarning
       - name: file-operation tests on a loop-mounted exFAT filesystem
         run: |
-          sudo apt-get update -qq
+          sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30
           sudo apt-get install -y -qq exfatprogs "linux-modules-extra-$(uname -r)"
           sudo modprobe exfat
           truncate -s 256M "$RUNNER_TEMP/exfat.img"
@@ -73,6 +74,7 @@ jobs:
           sudo umount /mnt/exfat-unit
 
   image:
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -111,6 +113,7 @@ jobs:
           retention-days: 3
 
   integration:
+    timeout-minutes: 25
     needs: image
     runs-on: ubuntu-24.04
     permissions:
@@ -131,7 +134,7 @@ jobs:
         with:
           enable-cache: false
       - run: |
-          sudo apt-get update -qq
+          sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30
           sudo apt-get install -y -qq smbclient exfatprogs "linux-modules-extra-$(uname -r)"
           sudo modprobe exfat
           uv sync --frozen
@@ -140,6 +143,7 @@ jobs:
         run: scripts/ci/integration.sh "$LOCAL_TAG" "${{ matrix.fs }}"
 
   trivy:
+    timeout-minutes: 15
     needs: image
     runs-on: ubuntu-24.04
     permissions:
