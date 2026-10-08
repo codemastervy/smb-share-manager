@@ -1,29 +1,38 @@
 smb-share-manager
 =================
 
-A small Docker container with a web UI for one job: creating and managing SMB (Samba)
-shares and the SMB users who can use them, plus a minimal folder browser to pick the folder
-to share.
+A small Docker container with a web UI for one job: sharing folders over SMB (Samba) and
+managing the SMB users who can reach them. It is the file browser, Shares and Users part
+of nas-dashboard, without the dashboard and apps, on a hardened backend, with images
+published automatically so the server only ever pulls.
+
+![Files](docs/screenshots/files.png)
 
 What it does:
 
 - admin login (one admin)
-- SMB users: create, set password, delete
-- shares: create, edit, delete; per-user read-only or read/write; optional "every SMB user
-  of this server" access; comment
-- folder browser limited to the folders you mount: list, new folder, rename, delete,
-  upload, download (always as a file download, never shown in the browser)
-- the generated Samba configuration and live status (is smbd up, does it agree with
-  what the UI thinks)
-- one-time import of shares and users from an old Samba server (CasaOS)
+- Files: browse the folders you mount, as drives; list or grid view, sort, search this
+  folder, new folder, rename, copy/cut/paste, delete, upload with progress, download.
+  Files are always downloaded, never opened in the page.
+- right-click a folder and choose "Share via SMB": pick who gets read-only or read & write
+  access
+- Shares: see every share and who can use it, edit, unshare (connected clients are
+  disconnected), view the live Samba configuration, check that Samba agrees with the UI,
+  fix a share folder's permissions on unix filesystems (only after you tick to confirm)
+- Users: SMB accounts with a display name; create, change password, remove
+- Import: one-time import of users (with their old passwords) and shares from CasaOS or
+  another Samba server
 - a warning when a folder is on exFAT/FAT/NTFS, where access is enforced by Samba at share
   level only
+- light and dark mode, works on a phone (long-press opens the menu)
 
 It deliberately does nothing else: no system stats, no app launcher, no terminal, no file
 preview, no telemetry and no update checks. It makes no network calls of its own.
 
 How it works:
 
+- The UI is a React app (from nas-dashboard) built into the image. It talks to a JSON API
+  that needs a login session and a CSRF token for every change.
 - smbd runs as root inside the container, because it has to switch to each SMB user.
 - The web UI runs as your user (PUID/PGID, default 1000).
 - Everything that needs root goes through a small helper. It is reachable only over a
@@ -31,6 +40,31 @@ How it works:
 - All state lives in ./data next to docker-compose.yml.
 
 SECURITY.md describes the threat model and docs/UPDATING.md describes automatic updates.
+
+
+Screenshots
+-----------
+
+Sample data from a local demo build.
+
+Drives, then a folder:
+
+![Drives](docs/screenshots/drives.png)
+
+Right-click a folder to share it:
+
+![Context menu](docs/screenshots/context-menu.png)
+
+![Share via SMB](docs/screenshots/share-dialog.png)
+
+Shares and SMB users:
+
+![Shares](docs/screenshots/shares.png)
+
+![Users](docs/screenshots/users.png)
+
+Light mode and the login screen: [light mode](docs/screenshots/files-light.png),
+[login](docs/screenshots/login.png).
 
 
 Requirements
@@ -126,12 +160,12 @@ add that name to ALLOWED_HOSTS in .env. IP addresses always work.
 
 Then:
 
-1. SMB users: create a user.
-2. Folders: browse to a folder under /mnt/files and choose "Share this folder".
-3. Give the user read-only or read/write access and create the share.
+1. Users: Add user.
+2. Files: open the "files" drive, right-click a folder and choose "Share via SMB".
+3. Tick the user, choose read-only or read & write, and click "Share folder".
 4. On a Mac: Finder, Go, Connect to Server, smb://<server>, then log in as that user.
-5. To stop sharing, open the share and choose "Remove share". Clients are disconnected and
-   the folder is not touched.
+5. To stop sharing: Shares, "Unshare". Clients are disconnected and the folder is not
+   touched.
 
 If the container keeps restarting, check the log:
 
@@ -204,7 +238,7 @@ SMB_PORT_139=139
 docker compose up -d
 ```
 
-7. Open the Import page:
+7. Open the Import page in the sidebar:
    - Import each user first. Users keep their old SMB password, and the hash never
      leaves the container's root helper.
    - Then import each share. Check the folder path: CasaOS paths such as /DATA/... must
@@ -321,6 +355,15 @@ uv sync
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run bandit -q -r src -c pyproject.toml && uv run pytest
 ```
 
+The web UI:
+
+```bash
+cd frontend && npm ci --ignore-scripts && npm run build
+```
+
+`npm run dev` serves the UI with live reload and forwards /api to a container on
+port 8095.
+
 The integration tests (tests/integration) need Docker and run in CI against the built
-image, on both an exFAT loop mount and ext4. See scripts/ci/integration.sh. CLAUDE.md lists
-the project rules: the security requirements are invariants, and the scope is fixed.
+image, on both an exFAT loop mount and ext4. They include a real-browser test (Chromium)
+of the UI. See scripts/ci/integration.sh.

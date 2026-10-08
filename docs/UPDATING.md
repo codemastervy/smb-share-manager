@@ -16,8 +16,9 @@ with three tags:
 - sha-<commit>: the exact source commit
 
 An image is pushed only after the full test suite has passed against that exact image:
-lint, type checks, bandit, pip-audit, unit and fuzz tests, and the integration tests (real
-smbclient connections on exFAT and ext4). Trivy must also find no fixable HIGH or CRITICAL
+lint, type checks, bandit, pip-audit, npm audit, unit and fuzz tests, and the integration
+tests (real smbclient connections on exFAT and ext4, plus a real Chromium session clicking
+through the UI). Trivy must also find no fixable HIGH or CRITICAL
 vulnerabilities. The image that was tested is the image that gets pushed; it is never
 rebuilt in between. Each push gets an SBOM, a build provenance attestation and a cosign
 signature.
@@ -29,8 +30,8 @@ Images are published in three situations:
    --no-cache), so Debian security updates and a refreshed base image land even when
    nothing in the repository changed, then runs everything above. It pushes latest (and
    the dated tag) only if everything is green.
-3. Dependabot checks Python packages, the Docker base images and the GitHub Actions
-   weekly:
+3. Dependabot checks Python packages, the web UI's npm packages, the Docker base images
+   and the GitHub Actions weekly:
    - Minor and patch updates are grouped into one pull request per kind and merged
      automatically once every CI check is green.
    - Major updates get their own pull request, labelled needs-review, and are never
