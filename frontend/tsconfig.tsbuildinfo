@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/contextmenu.tsx","./src/components/modal.tsx","./src/components/sharedialog.tsx","./src/components/toast.tsx","./src/lib/api.ts","./src/lib/format.ts","./src/pages/files.tsx","./src/pages/import.tsx","./src/pages/login.tsx","./src/pages/shares.tsx","./src/pages/users.tsx"],"version":"5.9.3"}

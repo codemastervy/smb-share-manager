@@ -10,3 +10,6 @@ build/
 data/
 import/
 .env
+
+frontend/node_modules/
+frontend/dist/
