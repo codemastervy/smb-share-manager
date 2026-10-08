@@ -49,8 +49,10 @@ Browser to web app:
   the admin password (in .env, then restarting) revokes all sessions.
 - The cookie is HttpOnly and SameSite=Strict, and Secure when HTTPS is used (or
   COOKIE_SECURE=true).
-- Every state-changing request needs a per-session CSRF token and a matching
-  Origin/Referer. Requests whose Host header is not an IP, localhost or an ALLOWED_HOSTS
+- The UI is a static React app; all data goes through a JSON API. Every state-changing
+  request needs the per-session CSRF token in an X-CSRF-Token header (a cross-site form
+  cannot set headers) and a matching Origin/Referer. Request bodies are strict: unknown
+  fields are rejected. Requests whose Host header is not an IP, localhost or an ALLOWED_HOSTS
   entry are rejected, which defeats DNS rebinding.
 - Logins are throttled with exponential backoff (up to 15 minutes), keyed on the TCP peer
   address. X-Forwarded-For counts only from TRUSTED_PROXIES (default none). The throttle's
@@ -58,10 +60,12 @@ Browser to web app:
 - Only /login, /healthz (status, version, build date) and /static are reachable without
   logging in. There are no API docs.
 - A strict Content-Security-Policy: default-src 'self', no inline scripts or styles,
-  frame-ancestors 'none'. htmx is vendored, pinned by hash and has eval disabled.
+  frame-ancestors 'none'. The built UI is checked in CI for inline scripts, and its npm
+  dependencies are installed from the lockfile (sha512 integrity) with install scripts
+  disabled; npm audit runs on every build.
 - User files are never rendered. Downloads are always Content-Disposition: attachment,
   Content-Type application/octet-stream, nosniff, with a CSP of default-src 'none' plus
-  sandbox. There is no preview feature.
+  sandbox. The nas-dashboard preview feature was removed, and the API has no inline mode.
 
 Web app (unprivileged) to root helper:
 
@@ -102,6 +106,10 @@ Folder browser:
 - Only the configured volumes are reachable.
 - Paths are walked component by component with openat(O_NOFOLLOW). Symlinks are never
   followed; deleting a link deletes the link.
+- Copy, move and search never follow symlinks and stay inside the volumes. Copy and move
+  refuse to put a folder inside itself. A move across filesystems copies first and deletes
+  the source only after the complete copy exists. Shared folders (and their parents) can't
+  be moved or deleted.
 - Nothing is ever overwritten. Renames use renameat2(RENAME_NOREPLACE) when the filesystem
   supports it; otherwise a locked check-then-rename is used. Uploads use a temp file and
   "name (1).ext" on conflict.

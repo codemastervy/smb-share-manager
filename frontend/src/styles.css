@@ -308,9 +308,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 
 .selection-bar {
+  /* Floats over the page: inserting it above the list used to push every row down
+     between the two clicks of a double-click, opening the wrong folder. */
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 150;
+  width: min(720px, calc(100vw - 36px)); box-shadow: var(--shadow);
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 9px 12px; margin-bottom: 12px;
-  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  padding: 9px 12px; margin-bottom: 0;
+  background: var(--bg-elevated); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: var(--radius);
 }
 

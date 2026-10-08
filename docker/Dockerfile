@@ -1,9 +1,18 @@
 # smb-share-manager image. Base images are pinned by digest; Dependabot keeps them current.
-# (Both FROM lines name the same Debian image; keep them in sync.)
+# (Both Debian FROM lines name the same image; keep them in sync.)
 # Debian packages are deliberately not version-pinned so that the weekly --pull --no-cache
 # rebuild picks up Debian security updates.
 
 FROM ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS uv
+
+# ---- build stage: the React UI (npm ci from the lockfile, which pins sha512 integrity) ----
+FROM node:24-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS frontend
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json ./
+# --ignore-scripts: no package install scripts run during the build.
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
 
 # ---- build stage: Python dependencies from the hash-locked uv.lock ----------------------
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS build
@@ -47,6 +56,7 @@ RUN apt-get update \
 
 COPY --from=build /opt/venv /opt/venv
 COPY src/ssm /opt/app/ssm
+COPY --from=frontend /build/dist /opt/app/frontend
 COPY docker/smb.conf /etc/samba/smb.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/healthcheck.py /usr/local/bin/healthcheck.py
@@ -60,6 +70,7 @@ ENV PATH=/opt/venv/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONUNBUFFERED=1 \
     APP_VERSION=${APP_VERSION} \
     BUILD_DATE=${BUILD_DATE} \
+    FRONTEND_DIR=/opt/app/frontend \
     PUID=1000 \
     PGID=1000 \
     VOLUMES=/mnt/files
