@@ -61,8 +61,10 @@ jobs:
       - name: file-operation tests on a loop-mounted exFAT filesystem
         run: |
           sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo apt-get install -y -qq exfatprogs "linux-modules-extra-$(uname -r)"
-          sudo modprobe exfat
+          sudo apt-get install -y -qq exfatprogs
+          # Newer runner kernels ship exfat in the base modules package and have no
+          # linux-modules-extra-* package at all; only install it when the module is missing.
+          sudo modprobe exfat || { sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" && sudo modprobe exfat; }
           truncate -s 256M "$RUNNER_TEMP/exfat.img"
           mkfs.exfat "$RUNNER_TEMP/exfat.img"
           sudo mkdir -p /mnt/exfat-unit
@@ -135,8 +137,8 @@ jobs:
           enable-cache: false
       - run: |
           sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo apt-get install -y -qq smbclient exfatprogs "linux-modules-extra-$(uname -r)"
-          sudo modprobe exfat
+          sudo apt-get install -y -qq smbclient exfatprogs
+          sudo modprobe exfat || { sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" && sudo modprobe exfat; }
           uv sync --frozen
           uv run playwright install --with-deps chromium-headless-shell
       - name: Integration tests (${{ matrix.fs }})
