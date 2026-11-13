@@ -1,3 +1,4 @@
+import { Icon } from '../components/Icon'
 import { useCallback, useEffect, useState } from 'react'
 import { TopBar } from '../App'
 import { api, User } from '../lib/api'
@@ -42,7 +43,7 @@ export function Users({ onMenu }: { onMenu: () => void }) {
           <div className="empty"><span className="spin" /></div>
         ) : users.length === 0 ? (
           <div className="empty">
-            <span className="glyph">👥</span>
+            <span className="glyph"><Icon name="users" size={30} /></span>
             No SMB users yet.<br />
             <span className="hint">Add one, then grant it access when you share a folder.</span>
           </div>

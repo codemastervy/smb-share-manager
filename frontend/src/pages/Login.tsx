@@ -1,3 +1,4 @@
+import { Icon } from '../components/Icon'
 import { FormEvent, useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 
@@ -31,7 +32,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
       <form className="card" onSubmit={submit}
             style={{ width: 'min(390px, 100%)', padding: 26 }}>
         <div className="brand" style={{ padding: '0 0 16px' }}>
-          <span className="brand-mark">💾</span>
+          <span className="brand-mark"><Icon name="server" size={15} /></span>
           <span>SMB Share Manager</span>
         </div>
 

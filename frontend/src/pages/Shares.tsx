@@ -1,3 +1,4 @@
+import { Icon } from '../components/Icon'
 import { useCallback, useEffect, useState } from 'react'
 import { TopBar } from '../App'
 import { api, PermissionPlan, SambaStatus, Share } from '../lib/api'
@@ -85,7 +86,7 @@ export function Shares({ onMenu }: { onMenu: () => void }) {
           <div className="empty"><span className="spin" /></div>
         ) : shares.length === 0 ? (
           <div className="empty">
-            <span className="glyph">🔗</span>
+            <span className="glyph"><Icon name="link" size={30} /></span>
             No folders are shared.<br />
             <span className="hint">
               That is the default. Go to <strong>Files</strong>, right-click a
