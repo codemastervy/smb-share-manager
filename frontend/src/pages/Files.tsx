@@ -1,3 +1,4 @@
+import { Icon } from '../components/Icon'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { TopBar } from '../App'
@@ -182,14 +183,14 @@ export function Files({ onMenu }: { onMenu: () => void }) {
 
     if (!entry) {
       return [
-        { label: 'New folder', icon: '📁', onSelect: () => setNewFolder(true) },
-        { label: 'Upload files', icon: '⬆️', onSelect: () => fileInput.current?.click() },
+        { label: 'New folder', icon: 'folder-plus', onSelect: () => setNewFolder(true) },
+        { label: 'Upload files', icon: 'upload', onSelect: () => fileInput.current?.click() },
         {
           label: clipboard ? `Paste ${clipboard.paths.length} item(s)` : 'Paste',
-          icon: '📋', disabled: !clipboard, separatorBefore: true,
+          icon: 'clipboard', disabled: !clipboard, separatorBefore: true,
           onSelect: () => void paste(),
         },
-        { label: 'Refresh', icon: '🔄', onSelect: () => void load() },
+        { label: 'Refresh', icon: 'refresh', onSelect: () => void load() },
       ]
     }
 
@@ -198,23 +199,23 @@ export function Files({ onMenu }: { onMenu: () => void }) {
     if (entry.is_dir) {
       items.push(entry.share
         ? {
-          label: `Edit share “${entry.share.name}”`, icon: '🔗',
+          label: `Edit share “${entry.share.name}”`, icon: 'link',
           onSelect: () => setSharing({ path: entry.path, name: entry.name, shareId: entry.share!.id }),
         }
         : {
-          label: 'Share via SMB…', icon: '🔗',
+          label: 'Share via SMB…', icon: 'link',
           onSelect: () => setSharing({ path: entry.path, name: entry.name }),
         })
-      items.push({ label: 'Open', icon: '📂', onSelect: () => open(entry) })
+      items.push({ label: 'Open', icon: 'folder-open', onSelect: () => open(entry) })
     } else {
-      items.push({ label: 'Download', icon: '⬇️', onSelect: () => { window.location.href = api.downloadUrl(entry.path) } })
+      items.push({ label: 'Download', icon: 'download', onSelect: () => { window.location.href = api.downloadUrl(entry.path) } })
     }
 
     items.push(
-      { label: 'Rename', icon: '✏️', separatorBefore: true, disabled: targets.length > 1, onSelect: () => setRenaming(entry) },
-      { label: `Copy${targets.length > 1 ? ` (${targets.length})` : ''}`, icon: '📄', onSelect: () => { setClipboard({ mode: 'copy', paths: targets }); toast(`${targets.length} item(s) ready to paste`) } },
-      { label: `Cut${targets.length > 1 ? ` (${targets.length})` : ''}`, icon: '✂️', onSelect: () => { setClipboard({ mode: 'cut', paths: targets }); toast(`${targets.length} item(s) ready to move`) } },
-      { label: `Delete${targets.length > 1 ? ` (${targets.length})` : ''}`, icon: '🗑️', danger: true, separatorBefore: true, onSelect: () => setConfirmDelete(targets) },
+      { label: 'Rename', icon: 'pencil', separatorBefore: true, disabled: targets.length > 1, onSelect: () => setRenaming(entry) },
+      { label: `Copy${targets.length > 1 ? ` (${targets.length})` : ''}`, icon: 'copy', onSelect: () => { setClipboard({ mode: 'copy', paths: targets }); toast(`${targets.length} item(s) ready to paste`) } },
+      { label: `Cut${targets.length > 1 ? ` (${targets.length})` : ''}`, icon: 'scissors', onSelect: () => { setClipboard({ mode: 'cut', paths: targets }); toast(`${targets.length} item(s) ready to move`) } },
+      { label: `Delete${targets.length > 1 ? ` (${targets.length})` : ''}`, icon: 'trash', danger: true, separatorBefore: true, onSelect: () => setConfirmDelete(targets) },
     )
     return items
   }
@@ -228,9 +229,9 @@ export function Files({ onMenu }: { onMenu: () => void }) {
       <TopBar title="Files" onMenu={onMenu}>
         <div className="row">
           <button className={`btn sm ${view === 'list' ? 'primary' : ''}`}
-                  onClick={() => setView('list')} title="List view">☰</button>
+                  onClick={() => setView('list')} title="List view"><Icon name="list" /></button>
           <button className={`btn sm ${view === 'grid' ? 'primary' : ''}`}
-                  onClick={() => setView('grid')} title="Grid view">▦</button>
+                  onClick={() => setView('grid')} title="Grid view"><Icon name="grid" /></button>
         </div>
       </TopBar>
 
@@ -247,7 +248,7 @@ export function Files({ onMenu }: { onMenu: () => void }) {
             <div className="card-head"><span className="card-title">Drives</span></div>
             {volumes.length === 0 ? (
               <div className="empty">
-                <span className="glyph">💽</span>
+                <span className="glyph"><Icon name="drive" size={30} /></span>
                 No folders are mounted into the container.<br />
                 <span className="hint">
                   Mount each folder under <span className="mono">volumes:</span> in
@@ -263,7 +264,7 @@ export function Files({ onMenu }: { onMenu: () => void }) {
                     <button key={v.name} className="card" style={{ textAlign: 'left', cursor: 'pointer' }}
                             onClick={() => go(v.path)}>
                       <div className="row">
-                        <span style={{ fontSize: 22 }}>💽</span>
+                        <Icon name="drive" size={22} />
                         <strong>{v.name}</strong>
                         <span className="spacer" />
                         {v.has_shares && <span className="badge accent">shared</span>}
@@ -321,7 +322,7 @@ export function Files({ onMenu }: { onMenu: () => void }) {
               </button>
 
               <button className="btn sm" onClick={() => setShowHidden((h) => !h)}
-                      title="Toggle hidden files">{showHidden ? '👁️' : '🙈'}</button>
+                      title="Toggle hidden files">{showHidden ? <Icon name="eye" /> : <Icon name="eye-off" />}</button>
               <button className="btn sm" onClick={() => setNewFolder(true)}>New folder</button>
               <button className="btn sm primary" onClick={() => fileInput.current?.click()}>Upload</button>
               <input ref={fileInput} type="file" multiple hidden
@@ -372,7 +373,7 @@ export function Files({ onMenu }: { onMenu: () => void }) {
               <div className="empty"><span className="spin" /></div>
             ) : entries.length === 0 ? (
               <div className="empty">
-                <span className="glyph">{searching ? '🔍' : '📂'}</span>
+                <span className="glyph">{searching ? <Icon name="search" size={30} /> : <Icon name="folder-open" size={30} />}</span>
                 {searching ? 'Nothing matched that search.' : 'This folder is empty.'}
               </div>
             ) : view === 'list' ? (
@@ -470,10 +471,10 @@ function FileRow({ entry, selected, onOpen, onSelect, onMenu }: {
     <div className={`file-row ${selected ? 'selected' : ''}`} {...press}
          onClick={(e) => onSelect(e.metaKey || e.ctrlKey || e.shiftKey)}
          onDoubleClick={onOpen}>
-      <span style={{ fontSize: 17 }}>{iconFor(entry)}</span>
+      <Icon name={iconFor(entry)} size={17} />
       <span className="name">
         <button onClick={(e) => { e.stopPropagation(); onOpen() }}>{entry.name}</button>
-        {entry.share && <span className="badge accent" title={`Shared as ${entry.share.name}`}>🔗 {entry.share.name}</span>}
+        {entry.share && <span className="badge accent" title={`Shared as ${entry.share.name}`}><Icon name="link" size={12} /> {entry.share.name}</span>}
         {entry.is_symlink && <span className="badge">link</span>}
       </span>
       <span className="size">{entry.is_dir ? '—' : bytes(entry.size)}</span>
@@ -494,9 +495,9 @@ function FileTile({ entry, selected, onOpen, onSelect, onMenu }: {
     <div className={`file-tile ${selected ? 'selected' : ''}`} {...press}
          onClick={(e) => onSelect(e.metaKey || e.ctrlKey || e.shiftKey)}
          onDoubleClick={onOpen}>
-      <div className="glyph">{iconFor(entry)}</div>
+      <div className="glyph"><Icon name={iconFor(entry)} size={30} /></div>
       <div className="label">{entry.name}</div>
-      {entry.share && <div className="badge accent" style={{ marginTop: 6 }}>🔗</div>}
+      {entry.share && <div className="badge accent" style={{ marginTop: 6 }}><Icon name="link" size={12} /></div>}
     </div>
   )
 }

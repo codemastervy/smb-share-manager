@@ -1,3 +1,4 @@
+import { Icon } from '../components/Icon'
 import { useCallback, useEffect, useState } from 'react'
 import { TopBar } from '../App'
 import { api, ImportScan, ImportedShare } from '../lib/api'
@@ -26,7 +27,7 @@ export function Import({ onMenu }: { onMenu: () => void }) {
           <div className="empty"><span className="spin" /></div>
         ) : !scan?.mounted ? (
           <div className="empty">
-            <span className="glyph">📥</span>
+            <span className="glyph"><Icon name="import" size={30} /></span>
             Nothing is mounted at <span className="mono">/import</span>.<br />
             <span className="hint">
               To move users and shares over from CasaOS or another Samba server, follow

@@ -1,3 +1,4 @@
+import { Icon } from './Icon'
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export interface MenuItem {
@@ -64,7 +65,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
           <button className={item.danger ? 'danger' : ''}
                   disabled={item.disabled}
                   onClick={() => { item.onSelect(); onClose() }}>
-            <span style={{ width: 16 }}>{item.icon}</span>{item.label}
+            <span className="menu-icon">{item.icon && <Icon name={item.icon} size={15} />}</span>{item.label}
           </button>
         </Fragmentish>
       ))}

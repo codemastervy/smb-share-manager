@@ -32,14 +32,14 @@ export function fileDate(epoch: number): string {
 
 /** Pick an icon glyph for a file, from its extension. */
 export function iconFor(entry: { is_dir: boolean; name: string }): string {
-  if (entry.is_dir) return '📁'
+  if (entry.is_dir) return 'folder'
   const ext = entry.name.split('.').pop()?.toLowerCase() ?? ''
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp', 'svg', 'avif'].includes(ext)) return '🖼️'
-  if (['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v'].includes(ext)) return '🎬'
-  if (['mp3', 'flac', 'wav', 'aac', 'm4a', 'ogg'].includes(ext)) return '🎵'
-  if (['pdf'].includes(ext)) return '📕'
-  if (['zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar'].includes(ext)) return '🗜️'
-  if (['txt', 'md', 'log', 'json', 'yml', 'yaml', 'conf', 'ini', 'csv'].includes(ext)) return '📄'
-  if (['iso', 'img', 'dmg'].includes(ext)) return '💿'
-  return '📦'
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'bmp', 'svg', 'avif'].includes(ext)) return 'image'
+  if (['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v'].includes(ext)) return 'video'
+  if (['mp3', 'flac', 'wav', 'aac', 'm4a', 'ogg'].includes(ext)) return 'music'
+  if (['pdf'].includes(ext)) return 'file-text'
+  if (['zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar'].includes(ext)) return 'archive'
+  if (['txt', 'md', 'log', 'json', 'yml', 'yaml', 'conf', 'ini', 'csv'].includes(ext)) return 'file-text'
+  if (['iso', 'img', 'dmg'].includes(ext)) return 'disc'
+  return 'package'
 }

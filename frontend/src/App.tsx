@@ -1,3 +1,4 @@
+import { Icon } from './components/Icon'
 import { useCallback, useEffect, useState } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { api, Info } from './lib/api'
@@ -11,10 +12,10 @@ import { Login } from './pages/Login'
 type AuthState = 'checking' | 'in' | 'out'
 
 const NAV = [
-  { to: '/files', label: 'Files', icon: '🗂️', end: false },
-  { to: '/shares', label: 'Shares', icon: '🔗', end: false },
-  { to: '/users', label: 'Users', icon: '👥', end: false },
-  { to: '/import', label: 'Import', icon: '📥', end: false },
+  { to: '/files', label: 'Files', icon: 'folder', end: false },
+  { to: '/shares', label: 'Shares', icon: 'share', end: false },
+  { to: '/users', label: 'Users', icon: 'users', end: false },
+  { to: '/import', label: 'Import', icon: 'import', end: false },
 ]
 
 export default function App() {
@@ -74,7 +75,7 @@ export default function App() {
 
         <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
           <div className="brand">
-            <span className="brand-mark">💾</span>
+            <span className="brand-mark"><Icon name="server" size={15} /></span>
             <span>SMB Share Manager</span>
           </div>
 
@@ -82,7 +83,7 @@ export default function App() {
             {NAV.map((item) => (
               <NavLink key={item.to} to={item.to} end={item.end}
                        className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <span className="nav-icon">{item.icon}</span>{item.label}
+                <span className="nav-icon"><Icon name={item.icon} /></span>{item.label}
               </NavLink>
             ))}
           </nav>
@@ -96,14 +97,14 @@ export default function App() {
             )}
             <button className="nav-link"
                     onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-              <span className="nav-icon">{theme === 'dark' ? '☀️' : '🌙'}</span>
+              <span className="nav-icon">{theme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</span>
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
             <button className="nav-link" onClick={async () => {
               await api.logout().catch(() => {})
               setAuth('out')
             }}>
-              <span className="nav-icon">🚪</span>Sign out
+              <span className="nav-icon"><Icon name="logout" /></span>Sign out
             </button>
           </div>
         </aside>
@@ -136,7 +137,7 @@ export function TopBar({ title, onMenu, children }: {
 }) {
   return (
     <header className="topbar">
-      <button className="btn ghost icon menu-btn" onClick={onMenu} aria-label="Open menu">☰</button>
+      <button className="btn ghost icon menu-btn" onClick={onMenu} aria-label="Open menu"><Icon name="menu" /></button>
       <h1>{title}</h1>
       <div className="spacer" />
       {children}
