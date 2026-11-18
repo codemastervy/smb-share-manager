@@ -6,7 +6,7 @@
 FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 
 # ---- build stage: the React UI (npm ci from the lockfile, which pins sha512 integrity) ----
-FROM node:24-trixie-slim@sha256:173f125896c3b47ddf056734c7ea789d04595a6a08769a8f78e0df642781fb66 AS frontend
+FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 # --ignore-scripts: no package install scripts run during the build.
