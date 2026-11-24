@@ -96,3 +96,17 @@ class HelperClient:
 
     def import_user(self, name: str) -> None:
         self.call("import_user", name=name)
+
+
+class VerifyClient:
+    """The WebDAV service's only way to reach the helper: one password check."""
+
+    def __init__(self, socket_path: str, timeout: float = 10.0) -> None:
+        self._client = HelperClient(socket_path, timeout)
+
+    def verify(self, name: str, password: str) -> bool:
+        """True or False for the credential; HelperError if the helper is unavailable."""
+        result = self._client.call("user_verify_password", name=name, password=password)
+        if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+            raise HelperError("invalid reply from helper")
+        return bool(result["ok"])

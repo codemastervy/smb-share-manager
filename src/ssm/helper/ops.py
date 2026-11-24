@@ -9,6 +9,7 @@ Rules for this module:
 
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import secrets
@@ -23,11 +24,14 @@ from typing import Any
 from ssm import fsinfo, importer, render
 from ssm import validators as v
 from ssm.helper import extrausers
+from ssm.helper.md4 import nt_hash
 from ssm.models import ShareSpec
 
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
 NT_HASH_RE = re.compile(r"[0-9A-F]{32}")
 CMD_TIMEOUT = 60
+# Compared against when the user is unknown, so both paths do the same work.
+_DUMMY_NT_HASH = "0" * 32
 
 
 class HelperOpError(Exception):
@@ -235,6 +239,37 @@ class HelperOps:
             extrausers.remove_user(self.cfg.extrausers_dir, name, self.cfg.smb_gid)
         except ValueError as e:
             raise HelperOpError(str(e)) from e
+
+    def user_verify_password(self, name: str, password: str) -> dict[str, bool]:
+        """Check a password against the user's Samba NT hash. Returns {"ok": bool} only.
+
+        Never raises for a wrong or malformed credential and never returns or logs the
+        hash. Unknown, invalid and disabled accounts take the same comparison path."""
+        ok_input = (
+            isinstance(name, str)
+            and isinstance(password, str)
+            and 0 < len(password) <= v.MAX_PASSWORD_LEN
+            and not v.has_control_chars(password)
+        )
+        stored = _DUMMY_NT_HASH
+        usable = False
+        if ok_input:
+            try:
+                v.validate_username(name)
+            except v.ValidationError:
+                ok_input = False
+        if ok_input and name in self._known_users():
+            proc = self._run("pdbedit", ["-w", f"--user={name}"], check=False)
+            if proc.returncode == 0:
+                for ln in proc.stdout.splitlines():
+                    parts = ln.split(":")
+                    if len(parts) >= 5 and parts[0] == name:
+                        nt, flags = parts[3].upper(), parts[4]
+                        if NT_HASH_RE.fullmatch(nt) and "D" not in flags.strip("[]"):
+                            stored, usable = nt, True
+        candidate = nt_hash(password if isinstance(password, str) else "")
+        match = hmac.compare_digest(candidate.encode(), stored.encode())
+        return {"ok": bool(usable and ok_input and match)}
 
     def user_list(self) -> list[str]:
         out = self._run("pdbedit", ["-L"]).stdout
