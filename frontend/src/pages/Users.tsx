@@ -59,7 +59,10 @@ export function Users({ onMenu }: { onMenu: () => void }) {
                 {users.map((u) => (
                   <tr key={u.username}>
                     <td><strong>{u.display_name}</strong></td>
-                    <td className="mono">{u.username}</td>
+                    <td className="mono">
+                      {u.username}
+                      {u.remote_access && <span className="badge" style={{ marginLeft: 6 }}>remote</span>}
+                    </td>
                     <td>
                       {!u.shares?.length ? <span className="hint">none</span> : (
                         <div className="row wrap" style={{ gap: 4 }}>
@@ -140,6 +143,7 @@ function UserDialog({ user, onClose, onDone }: {
   const [username, setUsername] = useState(user?.username ?? '')
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
   const [password, setPassword] = useState('')
+  const [remote, setRemote] = useState(!!user?.remote_access)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
@@ -150,6 +154,7 @@ function UserDialog({ user, onClose, onDone }: {
       if (user) {
         await api.updateUser(user.username, {
           display_name: displayName,
+          remote_access: remote,
           ...(password ? { password } : {}),
         })
         toast('User updated', 'ok')
@@ -199,6 +204,20 @@ function UserDialog({ user, onClose, onDone }: {
                onChange={(e) => setPassword(e.target.value)} />
         <span className="hint">At least 10 characters.</span>
       </div>
+
+      {user && (
+        <div className="field">
+          <label className="check">
+            <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} />
+            <span>Remote access (WebDAV)</span>
+          </label>
+          <span className="hint">
+            Lets this user reach their WebDAV-exposed shares from outside the house with this
+            username and password. Only turn it on for users with a password of 16 or more
+            random characters.
+          </span>
+        </div>
+      )}
 
       {error && <div className="notice danger">{error}</div>}
     </Modal>

@@ -96,6 +96,7 @@ export interface PermissionPlan {
 
 export interface User {
   username: string; display_name: string; created_at: number | null
+  remote_access?: boolean
   shares?: Array<{ id: string; name: string; access: string | null }>
 }
 
@@ -164,7 +165,8 @@ export const api = {
   users: () => get<{ users: User[] }>('/api/users'),
   createUser: (body: { username: string; password: string; display_name: string }) =>
     post<User>('/api/users', body),
-  updateUser: (username: string, body: { password?: string; display_name?: string }) =>
+  updateUser: (username: string,
+               body: { password?: string; display_name?: string; remote_access?: boolean }) =>
     patch<User>(`/api/users/${q(username)}`, body),
   deleteUser: (username: string) =>
     del<{ deleted: string; removed_from_shares: string[] }>(`/api/users/${q(username)}`),

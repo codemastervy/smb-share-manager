@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ssm import audit, fsinfo, importer
 from ssm import validators as v
+from ssm.acl_export import AclExporter
 from ssm.auth import AdminCredential, LoginThrottle, SessionManager, client_ip, peer_is_trusted
 from ssm.files import Entry, FileOpError, FileOps
 from ssm.helper_client import Helper, HelperClient, HelperError
@@ -87,6 +88,7 @@ class UserCreate(Body):
 class UserUpdate(Body):
     password: str | None = None
     display_name: str | None = None
+    remote_access: bool | None = None
 
 
 class MkdirBody(Body):
@@ -138,6 +140,8 @@ def create_app(
 
     data = Path(settings.data_dir) / "app"
     registry = Registry(data / "registry.db")
+    registry.on_change = AclExporter(registry, settings.dav_bridge_dir, volumes)
+    registry.on_change()
     cred = AdminCredential(settings.admin_password, settings.admin_password_hash, data / "secret")
     sessions = SessionManager(registry, cred.fingerprint, clock)
     sessions.purge()
@@ -675,12 +679,14 @@ def create_app(
     async def users_list(s: SessionRow = Depends(require_read)) -> dict[str, Any]:
         shares = registry.list_shares()
         out = []
+        flags = registry.user_flags()
         for name, display, created in registry.user_details():
             out.append(
                 {
                     "username": name,
                     "display_name": display or name,
                     "created_at": created or None,
+                    "remote_access": flags.get(name, (0, False))[1],
                     "shares": [
                         {"id": x.name, "name": x.name, "access": x.members[name]}
                         for x in shares
@@ -735,11 +741,19 @@ def create_app(
             raise bad("no such user", 404)
         if body.display_name is not None:
             registry.set_display_name(username, check_display(body.display_name))
+        if body.remote_access is not None:
+            registry.set_remote_access(username, body.remote_access)
+            audit.event("user_remote_access", user=username, enabled=body.remote_access)
         if body.password:
             try:
-                helper_.user_set_password(username, v.validate_password(body.password))
+                pw = v.validate_password(body.password)
             except v.ValidationError as e:
                 raise bad(str(e)) from e
+            # Invalidate cached WebDAV credentials before the password changes, so a
+            # failure below can only force an extra check, never keep the old password.
+            registry.bump_cred(username)
+            try:
+                helper_.user_set_password(username, pw)
             except HelperError as e:
                 raise bad(str(e), 502) from e
             audit.event("user_password_set", user=username)
@@ -757,6 +771,17 @@ def create_app(
                 "or unshare it first; a share nobody can reach is not allowed.",
                 409,
             )
+        # Cut off WebDAV first; restored below if the deletion fails.
+        was_remote = registry.user_flags().get(username, (0, False))[1]
+        registry.set_remote_access(username, False)
+        try:
+            return delete_user_now(username)
+        except BaseException:
+            if was_remote and registry.has_user(username):
+                registry.set_remote_access(username, True)
+            raise
+
+    def delete_user_now(username: str) -> dict[str, Any]:
         shares = registry.list_shares()
         affected = [x.name for x in shares if username in x.members]
         apply(

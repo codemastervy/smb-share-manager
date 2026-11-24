@@ -36,6 +36,7 @@ class Settings:
     import_dir: str = "/import"
     frontend_dir: str = "/opt/app/frontend"
     server_name: str = "NAS"
+    dav_bridge_dir: str = "/run/ssm-dav"
 
     def check(self) -> None:
         if not self.admin_password and not self.admin_password_hash:
@@ -90,6 +91,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         import_dir=env.get("IMPORT_DIR", "/import"),
         frontend_dir=env.get("FRONTEND_DIR", "/opt/app/frontend"),
         server_name=env.get("SMB_SERVER_NAME", "NAS"),
+        dav_bridge_dir=env.get("DAV_BRIDGE_DIR", "/run/ssm-dav"),
     )
     s.check()
     return s
