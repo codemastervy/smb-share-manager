@@ -129,6 +129,56 @@ Container:
   deletes. Passwords are never logged.
 
 
+WebDAV service (in development)
+-------------------------------
+
+Status: being built on the webdav branch. Nothing below is in a published image yet. When
+it ships, the deployment assumption "never exposed to the internet" still holds for the
+admin UI, but no longer for the WebDAV service, which is meant to be reached through a
+Cloudflare Tunnel and Traefik.
+
+New exposure and trade-offs:
+
+- An internet-reachable endpoint protected only by a password. WebDAV clients (iOS Files,
+  macOS Finder, Windows, Cryptomator) can only send HTTP Basic credentials, so the reverse
+  proxy's own login (passkeys, OIDC) has to be bypassed for this hostname.
+- Basic auth has no second factor, and the password goes with every request (inside TLS).
+  TLS ends at Cloudflare, which sees the requests in plain text.
+- The WebDAV password is the user's SMB password. A leaked WebDAV password is also an SMB
+  password on the LAN.
+- A per-user lockout lets an attacker slow down a user's new logins. Clients that already
+  hold a verified password keep working.
+
+Controls (each has a test):
+
+- Off by default. Only shares named in DAV_EXPOSED_SHARES are served, only their folders
+  are mounted into the WebDAV container, and a share that covers a whole volume is refused.
+- Only users with the remote_access flag (default off) can log in. Use 16 or more random
+  characters for their passwords.
+- Separate container and process, running as DAV_UID with no capabilities,
+  no-new-privileges and a read-only root filesystem. It can't reach ./data, the admin
+  socket or /mnt/timenest.
+- The password is checked by a verify-only operation of the root helper, on its own socket
+  that accepts only DAV_UID and serves only that operation. NT hashes never leave the
+  helper and nothing is logged.
+- Basic credentials are refused unless the request arrived over HTTPS. X-Forwarded-Proto and
+  the client IP headers are honoured only from TRUSTED_PROXIES.
+- Login throttle per user and per real client IP (never the proxy's address), exponential
+  backoff up to 15 minutes, bounded memory, generic errors, no password check during a
+  lockout. Audit lines for every success and failure, plus an optional ntfy notification
+  when a lockout starts.
+- Registry changes (user removed, membership or ro/rw changed, password changed) take
+  effect on the next request. Cached credentials are tied to a credential generation.
+- Same fd-based, no-follow path handling as the folder browser. Downloads are never
+  rendered. No HTML listings, no version banner, size limits and timeouts.
+- Overwriting: PUT may replace a file (read-write members only, atomically). MOVE and COPY
+  replace only with an explicit Overwrite: T, only a file onto a file, never a folder.
+
+What a fully compromised WebDAV process could still do: read and write the files of the
+exposed shares, and ask the helper to check passwords. It could not change shares, users or
+Samba, reach other folders, or get root.
+
+
 Known limitations
 -----------------
 

@@ -98,6 +98,16 @@ Or simply run the smoke test after each monthly update (see below). It warns whe
 image is more than 14 days old.
 
 
+WebDAV service (in development)
+-------------------------------
+
+The planned WebDAV service uses the same image as a second service in the same compose
+project, so the monthly script pulls and recreates it together with the main container. It
+has its own healthcheck and holds no state of its own: it reads the users and shares from a
+snapshot that the main container writes, and its locks live in memory only. Until it ships,
+nothing in this document changes.
+
+
 After an update: smoke test
 ---------------------------
 

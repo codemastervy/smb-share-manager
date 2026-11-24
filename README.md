@@ -333,6 +333,18 @@ SMB needs only TCP 445; 139 is kept for old clients. The cost is no NetBIOS broa
 browsing, which macOS and current Windows don't use: connect with smb://<server>.
 
 
+WebDAV access from outside (in development)
+-------------------------------------------
+
+Being built on the webdav branch, not in a published image yet. Planned: an optional second
+service in the same compose file (same image, port DAV_PORT, default 8094) that lets SMB
+users reach their shares over WebDAV (iOS Files, macOS Finder, Windows) through a Cloudflare
+Tunnel and a reverse proxy, with their existing SMB username and password. It is off by
+default. Only the shares listed in DAV_EXPOSED_SHARES and users with the "remote access" flag
+are served. HTTPS is required. Note that the Cloudflare free plan caps one request at 100 MB,
+so larger uploads only work on the home network. See SECURITY.md for the threat model.
+
+
 Updating and rolling back
 -------------------------
 
