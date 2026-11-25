@@ -6,7 +6,10 @@ managing the SMB users who can reach them. It is the file browser, Shares and Us
 of nas-dashboard, without the dashboard and apps, on a hardened backend, with images
 published automatically so the server only ever pulls.
 
-![Files](docs/screenshots/files.png)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/files-light.png">
+  <img alt="SMB Share Manager: browsing a shared family folder" src="docs/screenshots/files.png">
+</picture>
 
 What it does:
 
@@ -45,26 +48,63 @@ SECURITY.md describes the threat model and docs/UPDATING.md describes automatic 
 Screenshots
 -----------
 
-Sample data from a local demo build.
+Demo data, captured from the real app in Chromium. GitHub shows the light or dark version
+to match your theme.
+Regenerate them after a UI change with `uv run python scripts/screenshots.py` (needs
+`npm run build` and `uv run playwright install chromium-headless-shell` first).
 
-Drives, then a folder:
+**Files.** Your mounted folders appear as drives. Browse, search, upload, download, rename,
+copy and move; shared folders carry a badge.
 
-![Drives](docs/screenshots/drives.png)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/files-light.png">
+  <img alt="Files: browsing a folder" src="docs/screenshots/files.png">
+</picture>
 
-Right-click a folder to share it:
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/drives-light.png">
+  <img alt="Drives with free space" src="docs/screenshots/drives.png">
+</picture>
 
-![Context menu](docs/screenshots/context-menu.png)
+**Share a folder in two clicks.** Right-click it, choose Share via SMB, tick who gets read
+or read & write.
 
-![Share via SMB](docs/screenshots/share-dialog.png)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/context-menu-light.png">
+  <img alt="Right-click menu on a folder" src="docs/screenshots/context-menu.png">
+</picture>
 
-Shares and SMB users:
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/share-dialog-light.png">
+  <img alt="Share via SMB dialog" src="docs/screenshots/share-dialog.png">
+</picture>
 
-![Shares](docs/screenshots/shares.png)
+**Shares.** Every share, its folder, who can use it and the live state of Samba.
 
-![Users](docs/screenshots/users.png)
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/shares-light.png">
+  <img alt="Shares page" src="docs/screenshots/shares.png">
+</picture>
 
-Light mode and the login screen: [light mode](docs/screenshots/files-light.png),
-[login](docs/screenshots/login.png).
+**Users.** SMB accounts, their shares, and a `remote` badge for users allowed in over
+WebDAV.
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/users-light.png">
+  <img alt="Users page" src="docs/screenshots/users.png">
+</picture>
+
+**Remote access is per user and off by default.** It's a tick in the user's dialog, with a
+reminder to use a long password (see "WebDAV access from outside").
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/remote-access-light.png">
+  <img alt="Edit user with the Remote access (WebDAV) option" src="docs/screenshots/remote-access.png">
+</picture>
+
+**Sign-in.** One admin password; the UI is meant for your LAN or Tailscale only.
+
+![Login](docs/screenshots/login.png)
 
 
 Requirements
