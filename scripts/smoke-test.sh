@@ -111,7 +111,10 @@ fi
 # 8. WebDAV service (optional).
 DAV_CONTAINER="${DAV_CONTAINER:-smb-dav}"
 DAV_LOCAL_URL="${DAV_LOCAL_URL:-http://127.0.0.1:${DAV_PORT:-8094}}"
-dstate=$("${DOCKER[@]}" inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$DAV_CONTAINER" 2>/dev/null)
+dav_state() { "${DOCKER[@]}" inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$DAV_CONTAINER" 2>/dev/null; }
+dstate=$(dav_state)
+# Right after an update smb-dav waits for the main container: give it a minute.
+for _ in $(seq 1 30); do [[ "$dstate" == "running starting" ]] || break; sleep 2; dstate=$(dav_state); done
 if [[ -z "$dstate" ]]; then
   ok "WebDAV not enabled (no $DAV_CONTAINER container)"
 else

@@ -163,6 +163,16 @@ def test_copy_file_and_folder(dav: Dav) -> None:
     assert not [n for n in docs(dav) if n.startswith(".ssm-")]
 
 
+def test_copy_folder_depth_zero_is_shallow(dav: Dav) -> None:
+    (dav.vol / "Docs" / "d").mkdir()
+    (dav.vol / "Docs" / "d" / "f.txt").write_bytes(b"f")
+    r = dav.req("COPY", "/Docs/d", headers={"Destination": dest("/Docs/d0"), "Depth": "0"})
+    assert r.status == 201
+    assert (dav.vol / "Docs" / "d0").is_dir()
+    assert list((dav.vol / "Docs" / "d0").iterdir()) == []
+    assert (dav.vol / "Docs" / "d" / "f.txt").read_bytes() == b"f"
+
+
 def test_missing_overwrite_header_means_f(dav: Dav) -> None:
     (dav.vol / "Docs" / "other.txt").write_bytes(b"keep me")
     assert mv(dav, "/Docs/readme.txt", "/Docs/other.txt") == 412

@@ -119,6 +119,10 @@ DAV_PORT=8094
 # production default (HTTPS required) to test the proxy rules.
 DAV_ALLOW_HTTP=true
 DAV_MAX_UPLOAD_MB=64
+# Every CI request comes from one Docker gateway address. With the cache off, every
+# request is a real password check, which keeps the throttle tests deterministic; the
+# production-mode tests restart the service with the cache on.
+DAV_AUTH_CACHE_S=0
 ENV
 COMPOSE="docker compose --project-directory $WORK -f $WORK/docker-compose.yml -f $WORK/docker-compose.override.yml"
 $COMPOSE up -d

@@ -43,9 +43,14 @@ DPW = {
     "davro": "dav-ro-password-0123456789",
     "davnr": "dav-nr-password-0123456789",
 }
-# By design (overwrite rule): a COPY/MOVE never replaces an existing folder, so litmus's
-# "copy/move a collection onto an existing collection with Overwrite: T" steps get 403.
-LITMUS_EXPECTED_FAIL = {"copy_coll", "move_coll"}
+# By design (overwrite rule): COPY/MOVE never replace an existing folder, nor put a folder
+# over a file, so these litmus steps get 403. copy_shallow then fails only because
+# copy_coll left its source folder behind (MKCOL 405); depth-0 copies are covered by the
+# unit tests.
+LITMUS_EXPECTED_FAIL = {
+    "copymove": {"copy_overwrite", "copy_coll", "copy_shallow", "move", "move_coll"},
+}
+LITMUS_SUITES = ("basic", "copymove", "props", "locks", "http")
 
 
 # --- helpers ----------------------------------------------------------------------------
@@ -146,6 +151,7 @@ def hrefs(r: httpx.Response) -> list[str]:
 
 
 def restart_dav(**env: str) -> None:
+    env.setdefault("DAV_AUTH_CACHE_S", "300")
     subprocess.run(
         [*COMPOSE, "up", "-d", "--no-deps", "--force-recreate", "smb-dav"],
         check=True,
@@ -433,21 +439,29 @@ def test_membership_and_remote_flag_changes(admin: Admin, dsetup: dict[str, Any]
 def test_litmus(dsetup: dict[str, Any]) -> None:
     if shutil.which("litmus") is None:
         pytest.skip("litmus not installed")
-    assert dav("MKCOL", "/DavRW/litmus-root").status_code == 201
-    p = subprocess.run(
-        ["litmus", f"{DAV}/DavRW/litmus-root/", "davrw", DPW["davrw"]],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-        env={**os.environ, "TESTS": "basic copymove props locks http"},
-    )
-    out = p.stdout + p.stderr
-    print(out)
-    failed = set(re.findall(r"^\s*\d+\.\s+(\S+?)\.*\s*FAIL", out, re.M))
-    unexpected = failed - LITMUS_EXPECTED_FAIL
-    assert not unexpected, f"unexpected litmus failures {sorted(unexpected)}:\n{out[-6000:]}"
-    assert re.search(r"<- summary for `basic'", out), out[-3000:]
+    problems = []
+    # One suite per run: litmus's wrapper stops at the first suite with a failure.
+    for suite in LITMUS_SUITES:
+        root = f"/DavRW/litmus-{suite}"
+        assert dav("MKCOL", root).status_code == 201
+        p = subprocess.run(
+            ["litmus", f"{DAV}{root}/", "davrw", DPW["davrw"]],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+            env={**os.environ, "TESTS": suite},
+        )
+        out = p.stdout + p.stderr
+        print(out)
+        if not re.search(rf"<- summary for `{suite}'", out):
+            problems.append(f"{suite}: no summary\n{out[-3000:]}")
+            continue
+        failed = set(re.findall(r"^\s*\d+\.\s+(\S+?)\.*\s*FAIL", out, re.M))
+        unexpected = failed - LITMUS_EXPECTED_FAIL.get(suite, set())
+        if unexpected:
+            problems.append(f"{suite}: unexpected failures {sorted(unexpected)}\n{out[-4000:]}")
+    assert not problems, "\n".join(problems)
     assert DPW["davrw"] not in dav_logs()
 
 
@@ -545,7 +559,7 @@ def test_https_required_by_default(dsetup: dict[str, Any]) -> None:
     assert DPW["davrw"] not in dav_logs()
 
 
-def test_trusted_proxy_real_ip_and_lockout(dsetup: dict[str, Any]) -> None:
+def test_trusted_proxy_real_ip_and_lockout(admin: Admin, dsetup: dict[str, Any]) -> None:
     restart_dav(DAV_ALLOW_HTTP="false", DAV_TRUSTED_PROXIES=PROXY_NETS)
 
     def via(ip: str, user: str = "davrw", password: str | None = None, **h: str) -> httpx.Response:
@@ -558,7 +572,9 @@ def test_trusted_proxy_real_ip_and_lockout(dsetup: dict[str, Any]) -> None:
     assert via("198.51.100.2").status_code == 207
     # Attacker A fails; A backs off, B (same proxy) is not affected.
     assert via("203.0.113.1", password="wrong-password-1").status_code == 401
-    assert via("203.0.113.1").status_code == 401  # A is backing off: not even checked
+    r = via("203.0.113.1", user="davro")  # A is backing off: not even checked
+    assert r.status_code == 401 and "retry-after" in r.headers
+    # (davrw's verified credential would still pass from A: the cache comes first.)
     assert via("198.51.100.3").status_code == 207
     # Prepending fake entries does not change the key: the right-most untrusted entry wins.
     r = via("198.51.100.2, 203.0.113.1", password="wrong-password-2")
@@ -572,6 +588,12 @@ def test_trusted_proxy_real_ip_and_lockout(dsetup: dict[str, Any]) -> None:
     assert via("198.51.100.2").status_code == 207
     # Other users are not affected.
     assert via("198.51.100.4", user="davro").status_code == 207
+    # A password change kills the cached credential on the very next request.
+    admin.ok("PATCH", "/api/users/davrw", {"password": "dav-rw-password-NEW-55555"})
+    try:
+        assert via("198.51.100.2").status_code == 401
+    finally:
+        admin.ok("PATCH", "/api/users/davrw", {"password": DPW["davrw"]})
     logs = dav_logs()
     assert '"event": "dav_lockout"' in logs and '"user": "davrw"' in logs
     assert '"client": "203.0.113.1"' in logs
