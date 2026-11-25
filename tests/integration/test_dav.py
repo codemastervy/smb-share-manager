@@ -117,6 +117,30 @@ def wait_until(fn: Any, timeout: float = 15) -> Any:
     return last
 
 
+def settle() -> None:
+    """In CI every request comes from the same Docker gateway address, so a deliberate
+    failure puts that address into backoff (as it should). Wait it out: locked answers
+    carry Retry-After; a successful login then resets the address."""
+    for _ in range(60):
+        r = dav("PROPFIND", "/")
+        if "retry-after" not in r.headers:
+            assert r.status_code == 207, (r.status_code, r.text[:200])
+            return
+        time.sleep(min(float(r.headers["retry-after"]), 5))
+    raise AssertionError("still backing off")
+
+
+@pytest.fixture(autouse=True)
+def _settled(request: pytest.FixtureRequest) -> None:
+    if "dsetup" in request.fixturenames and request.node.name not in (
+        "test_https_required_by_default",
+        "test_trusted_proxy_real_ip_and_lockout",
+        "test_restore_ci_mode",
+    ):
+        request.getfixturevalue("dsetup")
+        settle()
+
+
 def hrefs(r: httpx.Response) -> list[str]:
     return re.findall(r"<(?:\w+:)?href>([^<]*)</(?:\w+:)?href>", r.text)
 
@@ -233,8 +257,10 @@ def test_real_password_verification(dsetup: dict[str, Any]) -> None:
     assert not any("DavRO" in h for h in listed)  # not a member
     assert not any(h.rstrip("/").endswith("/S1") for h in listed)  # not exposed
     assert dav("PROPFIND", "/", password="wrong-password-123456").status_code == 401
+    settle()
     # Correct SMB password, but no remote access.
     assert dav("PROPFIND", "/", user="davnr").status_code == 401
+    settle()
     assert dav("PROPFIND", "/DavRO/").status_code == 404
     assert dav("PROPFIND", "/S1/").status_code == 404
     logs = dav_logs()
@@ -364,10 +390,13 @@ def test_password_change_takes_effect_immediately(admin: Admin, dsetup: dict[str
     assert dav("PROPFIND", "/").status_code == 207  # now cached
     new = "dav-rw-password-NEW-98765"
     admin.ok("PATCH", "/api/users/davrw", {"password": new})
-    assert wait_until(lambda: dav("PROPFIND", "/").status_code == 401, 5)
-    assert dav("PROPFIND", "/", password=new).status_code == 207
-    admin.ok("PATCH", "/api/users/davrw", {"password": DPW["davrw"]})
-    assert wait_until(lambda: dav("PROPFIND", "/").status_code == 207, 5)
+    try:
+        # The very next request with the old (cached) password is refused.
+        assert dav("PROPFIND", "/").status_code == 401
+        assert wait_until(lambda: dav("PROPFIND", "/", password=new).status_code == 207, 30)
+    finally:
+        admin.ok("PATCH", "/api/users/davrw", {"password": DPW["davrw"]})
+    assert wait_until(lambda: dav("PROPFIND", "/").status_code == 207, 30)
 
 
 def test_membership_and_remote_flag_changes(admin: Admin, dsetup: dict[str, Any]) -> None:
@@ -377,10 +406,13 @@ def test_membership_and_remote_flag_changes(admin: Admin, dsetup: dict[str, Any]
         "/api/shares/DavRW",
         {"members": [{"username": "davrw", "access": "rw"}, {"username": "davnr", "access": "rw"}]},
     )
-    assert wait_until(lambda: dav("PROPFIND", "/DavRW/", user="davro").status_code == 404, 5)
+    assert dav("PROPFIND", "/DavRW/", user="davro").status_code == 404  # the next request
     admin.ok("PATCH", "/api/users/davro", {"remote_access": False})
-    assert wait_until(lambda: dav("PROPFIND", "/", user="davro").status_code == 401, 5)
-    admin.ok("PATCH", "/api/users/davro", {"remote_access": True})
+    try:
+        assert dav("PROPFIND", "/", user="davro").status_code == 401  # the next request
+    finally:
+        admin.ok("PATCH", "/api/users/davro", {"remote_access": True})
+    settle()
     admin.ok(
         "PATCH",
         "/api/shares/DavRW",
@@ -392,7 +424,7 @@ def test_membership_and_remote_flag_changes(admin: Admin, dsetup: dict[str, Any]
             ]
         },
     )
-    assert wait_until(lambda: dav("PROPFIND", "/DavRW/", user="davro").status_code == 207, 5)
+    assert wait_until(lambda: dav("PROPFIND", "/DavRW/", user="davro").status_code == 207, 30)
 
 
 # --- standard clients -------------------------------------------------------------------
