@@ -24,6 +24,11 @@ else
   sudo chown 1000:3000 "$VOLSRC"
   sudo chmod 2775 "$VOLSRC"
 fi
+# Folders of the shares the WebDAV container gets (and nothing else of the volume).
+for d in dav-rw dav-ro; do
+  sudo mkdir -p "$VOLSRC/$d"
+  if [[ "$FS" != exfat ]]; then sudo chown 1000:3000 "$VOLSRC/$d"; sudo chmod 2775 "$VOLSRC/$d"; fi
+done
 findmnt -T "$VOLSRC" || true
 echo "::endgroup::"
 
@@ -89,6 +94,11 @@ services:
     volumes:
       - $VOLSRC:/mnt/files
       - ./import:/import:ro
+  smb-dav:
+    image: $IMAGE
+    volumes:
+      - $VOLSRC/dav-rw:/mnt/files/dav-rw
+      - $VOLSRC/dav-ro:/mnt/files/dav-ro
 YAML
 cat > "$WORK/.env" <<ENV
 ADMIN_PASSWORD=$ADMIN_PW
@@ -101,6 +111,14 @@ SMB_PORT_139=1139
 SMB_SERVER_NAME=CI
 PUID=1000
 PGID=1000
+COMPOSE_PROFILES=dav
+DAV_EXPOSED_SHARES=DavRW,DavRO
+DAV_BIND_ADDR=127.0.0.1
+DAV_PORT=8094
+# Plain HTTP on loopback for litmus/rclone; test_dav.py also restarts the service with the
+# production default (HTTPS required) to test the proxy rules.
+DAV_ALLOW_HTTP=true
+DAV_MAX_UPLOAD_MB=64
 ENV
 COMPOSE="docker compose --project-directory $WORK -f $WORK/docker-compose.yml -f $WORK/docker-compose.override.yml"
 $COMPOSE up -d
@@ -110,6 +128,9 @@ cleanup() {
   echo "::group::container logs"
   docker logs smb-share-manager 2>&1 | tail -n 300 || true
   echo "::endgroup::"
+  echo "::group::WebDAV container logs"
+  docker logs smb-dav 2>&1 | tail -n 300 || true
+  echo "::endgroup::"
   $COMPOSE down -v || true
   if [[ "$FS" == exfat ]]; then sudo umount "$VOLSRC" || true; fi
   sudo rm -rf "$WORK" || true
@@ -118,4 +139,5 @@ trap cleanup EXIT
 
 SSM_URL=http://127.0.0.1:8095 SSM_PASSWORD="$ADMIN_PW" SSM_SMB_PORT=1445 SSM_FS="$FS" \
 SSM_CONTAINER=smb-share-manager SSM_COMPOSE="$COMPOSE" \
+SSM_DAV_URL=http://127.0.0.1:8094 SSM_DAV_CONTAINER=smb-dav SSM_DAV_SRC="$VOLSRC" \
   uv run --frozen pytest -v -p no:cacheprovider "$ROOT/tests/integration" -W ignore::DeprecationWarning

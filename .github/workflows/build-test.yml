@@ -137,7 +137,7 @@ jobs:
           enable-cache: false
       - run: |
           sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo apt-get install -y -qq smbclient exfatprogs
+          sudo apt-get install -y -qq smbclient exfatprogs litmus rclone
           sudo modprobe exfat || { sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" && sudo modprobe exfat; }
           uv sync --frozen
           uv run playwright install --with-deps chromium-headless-shell
