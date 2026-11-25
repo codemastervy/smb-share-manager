@@ -333,16 +333,131 @@ SMB needs only TCP 445; 139 is kept for old clients. The cost is no NetBIOS broa
 browsing, which macOS and current Windows don't use: connect with smb://<server>.
 
 
-WebDAV access from outside (in development)
--------------------------------------------
+WebDAV access from outside
+--------------------------
 
-Being built on the webdav branch, not in a published image yet. Planned: an optional second
-service in the same compose file (same image, port DAV_PORT, default 8094) that lets SMB
-users reach their shares over WebDAV (iOS Files, macOS Finder, Windows) through a Cloudflare
-Tunnel and a reverse proxy, with their existing SMB username and password. It is off by
-default. Only the shares listed in DAV_EXPOSED_SHARES and users with the "remote access" flag
-are served. HTTPS is required. Note that the Cloudflare free plan caps one request at 100 MB,
-so larger uploads only work on the home network. See SECURITY.md for the threat model.
+An optional second service in the same compose file (same image, container smb-dav, port
+8094) lets SMB users reach their shares from outside the house over WebDAV: iOS Files,
+macOS Finder, Windows, rclone, Cryptomator. They log in with their existing SMB username
+and password; there is no second password. It is off by default, and when it is on it
+serves only the shares you list, to the users you tick. Read SECURITY.md ("WebDAV
+service") before turning it on: unlike the admin UI, this service is meant to be reachable
+from the internet.
+
+What it is not: no sharing or public links, no sync client, no CalDAV/CardDAV, no media
+streaming, no web page. The admin UI is never reachable through it.
+
+How a request travels:
+
+```
+client --HTTPS--> Cloudflare --tunnel--> cloudflared --> Traefik (Pangolin) --HTTP--> smb-dav :8094
+```
+
+TLS ends at Cloudflare/Traefik. smb-dav accepts a password only if the request came over
+HTTPS, which it learns from X-Forwarded-Proto, and it believes that header only from the
+proxies listed in DAV_TRUSTED_PROXIES. A plain-HTTP request from anywhere else (for example
+a laptop on the LAN going straight to port 8094) is refused with 403 before any password is
+asked for.
+
+### Setting it up
+
+1. Decide which shares to offer, and add them to .env (share names as in the admin UI):
+
+   ```
+   COMPOSE_PROFILES=dav
+   DAV_EXPOSED_SHARES=Family,Isherveer
+   DAV_TRUSTED_PROXIES=192.168.0.0/18
+   ```
+
+   DAV_TRUSTED_PROXIES must contain the address Traefik connects from. With Pangolin,
+   Traefik runs in its own Docker network; on a default host that is inside
+   192.168.0.0/18 (`docker network inspect pangolin` shows the exact subnet: use the
+   narrowest range that fits). It is separate from TRUSTED_PROXIES, so the admin UI does
+   not start trusting Traefik.
+
+2. Mount each exposed share's folder into the smb-dav service in docker-compose.yml, at the
+   same path the share has in the admin UI (container path), read-write. Only those
+   folders: never the whole volume (smb-dav refuses to start), never ./data, never
+   /mnt/timenest.
+
+   ```yaml
+     smb-dav:
+       volumes:
+         - dav-bridge:/run/ssm-dav:ro
+         - /mnt/files/Family:/mnt/files/Family
+         - /mnt/files/Isherveer:/mnt/files/Isherveer
+   ```
+
+   A share that is listed but not mounted, or whose folder is a whole volume, is not served
+   (the smb-dav log says why: `dav_share_refused`).
+
+3. In the admin UI, Users, edit each person who should get in and tick
+   **Remote access (WebDAV)**. Give them a long random password (16 characters or more):
+   this password now protects their files from the whole internet, and it is also their
+   SMB password. Users without the tick can't log in over WebDAV even with the right
+   password.
+
+4. In Pangolin, add a resource for dav.<your domain> pointing at
+   http://<server LAN IP>:8094 (for example http://192.168.68.51:8094) and turn
+   Pangolin's own authentication off for that resource: WebDAV clients can only send a
+   username and password (HTTP Basic), which smb-dav checks itself. Do not add the dav
+   hostname to ALLOWED_HOSTS, and do not route it to port 8095.
+
+5. Start it and check it:
+
+   ```bash
+   docker compose up -d
+   DAV_URL=https://dav.example.org SMB_USER=isherveer SMB_SHARE=Family ./scripts/smoke-test.sh
+   ```
+
+Optional settings (.env): DAV_PORT and DAV_BIND_ADDR (where the port is published),
+DAV_MAX_UPLOAD_MB (default MAX_UPLOAD_MB), DAV_AUTH_CACHE_S (how long a verified password
+is remembered, default 300 s), DAV_REAL_IP_HEADER=cf-connecting-ip (only if your proxy
+always sets it), DAV_UID (default 2999, must differ from PUID), and NTFY_URL / NTFY_TOKEN
+for a phone notification when someone gets locked out.
+
+### Connecting
+
+- iOS/iPadOS Files: Browse, ..., Connect to Server, `https://dav.example.org`, Registered
+  User.
+- macOS Finder: Go, Connect to Server (Cmd-K), `https://dav.example.org`.
+- Windows: Map network drive, `https://dav.example.org`. Windows' WebDAV client refuses
+  files over 50 MB unless you raise FileSizeLimitInBytes in the WebClient registry key;
+  rclone or Cyberduck are more reliable on Windows.
+- rclone: `rclone config`, type webdav, vendor "other".
+
+You see one folder per share you can use. Read-only shares can be read but nothing in them
+can be changed.
+
+### Behaviour worth knowing
+
+- Uploads: Cloudflare's free plan stops any request over 100 MB, so bigger files fail from
+  outside whatever DAV_MAX_UPLOAD_MB says. At home, use the same https://dav... address
+  through local DNS (still HTTPS) or plain SMB.
+- Overwriting (WebDAV only; the admin folder browser still never overwrites): saving a file
+  replaces it atomically, so readers see the old or the new version, never half of one.
+  Moving or copying onto an existing name only replaces it when the client explicitly asks,
+  only a file with a file, never a folder.
+- Changes in the admin UI apply to the very next WebDAV request: removing a user or a
+  membership, switching rw to ro, untick remote access, a new password.
+- Renaming a share stops it being served until you update DAV_EXPOSED_SHARES (it fails
+  closed).
+- Symlinks, device files and the app's own temporary files are never shown.
+- Locks (Office, Finder) are kept in memory and are lost when smb-dav restarts.
+- Lockouts: after failed logins the client address backs off (1 s, doubling, up to 15
+  minutes), and after 5 failures for one user, that user's new logins back off too.
+  Devices that already logged in with the right password keep working.
+
+### Troubleshooting
+
+- 403 "HTTPS required": the request did not come from a proxy in DAV_TRUSTED_PROXIES, or
+  the proxy did not send X-Forwarded-Proto: https. Check the proxy's source address in
+  `docker logs smb-dav`.
+- 400 "Missing client address from proxy": a trusted proxy sent no usable X-Forwarded-For.
+- A share is missing: it's not in DAV_EXPOSED_SHARES, not mounted into smb-dav, has no
+  members, or the user isn't a member.
+- 503: the main container is down or restarting (smb-dav needs its password check and its
+  snapshot of users and shares).
 
 
 Updating and rolling back

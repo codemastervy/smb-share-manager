@@ -98,14 +98,22 @@ Or simply run the smoke test after each monthly update (see below). It warns whe
 image is more than 14 days old.
 
 
-WebDAV service (in development)
--------------------------------
+WebDAV service
+--------------
 
-The planned WebDAV service uses the same image as a second service in the same compose
-project, so the monthly script pulls and recreates it together with the main container. It
-has its own healthcheck and holds no state of its own: it reads the users and shares from a
-snapshot that the main container writes, and its locks live in memory only. Until it ships,
-nothing in this document changes.
+If you enabled WebDAV (COMPOSE_PROFILES=dav in .env), smb-dav uses the same image as a
+second service in the same compose project, so the monthly `docker compose pull` and
+`docker compose up -d` update and recreate it together with the main container; nothing
+changes in your script. It waits for the main container to be healthy, has its own
+healthcheck, and holds no state: users and shares come from a snapshot the main container
+writes, and locks live in memory only.
+
+Your per-share volume lines in docker-compose.yml are yours: keep them when you take a new
+docker-compose.yml from the repository.
+
+Rolling back to an image older than the WebDAV release: remove COMPOSE_PROFILES=dav from
+.env first (the old image has no WebDAV service). The new registry columns (remote access,
+credential generation) are additive, so older images just ignore them.
 
 
 After an update: smoke test
@@ -128,6 +136,11 @@ WARN or FAIL per check and exits non-zero on any FAIL. The checks:
 - anonymous access is refused
 - the SMB user can log in and list the share (smbclient against localhost, run inside the
   container)
+- if smb-dav exists: it is healthy and hardened (read-only, no capabilities,
+  no-new-privileges, not root, no /data or admin password inside), plain HTTP to its port
+  is refused before any password is asked for, there is no version banner, and the admin
+  API is not served on it. With DAV_URL=https://dav.example.org set, SMB_USER logs in over
+  WebDAV and sees the share, and the admin API is not reachable through that hostname.
 
 If it reports FAIL, roll back (next section) and open an issue with the output of
 docker compose logs --tail 200.

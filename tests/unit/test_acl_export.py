@@ -225,3 +225,45 @@ def test_failed_delete_keeps_remote_flag(bridge_env: Env) -> None:
     r = call(c, "delete", "/api/users/bob", csrf)
     assert r.status_code == 502
     assert _acl(bridge_env)["users"]["bob"]["remote"] is True
+
+
+def test_export_sets_group_for_the_dav_container(tmp_path: Path) -> None:
+    import os
+
+    reg = _reg(tmp_path)
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    gid = os.getgroups()[-1]  # any group this test user belongs to
+    AclExporter(reg, str(bridge), [], gid=gid)()
+    assert (bridge / "acl.json").stat().st_gid == gid
+
+
+def test_failed_export_removes_the_stale_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Fail closed: a snapshot that may grant removed access must not stay behind."""
+    reg = _reg(tmp_path)
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    exp = AclExporter(reg, str(bridge), [])
+    exp()
+    assert (bridge / "acl.json").exists()
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("ssm.acl_export.tempfile.mkstemp", boom)
+    exp()
+    assert not (bridge / "acl.json").exists()
+    assert '"acl_export", "ok": false' in capsys.readouterr().out
+
+
+def test_settings_smb_gid() -> None:
+    from ssm.settings import ConfigError, load_settings
+
+    base = {"ADMIN_PASSWORD": "x" * 12}
+    assert load_settings(base).dav_bridge_gid == 3000
+    assert load_settings({**base, "SMB_GID": "4000"}).dav_bridge_gid == 4000
+    for bad in ("0", "-1", "abc"):
+        with pytest.raises(ConfigError):
+            load_settings({**base, "SMB_GID": bad})

@@ -129,54 +129,106 @@ Container:
   deletes. Passwords are never logged.
 
 
-WebDAV service (in development)
--------------------------------
+WebDAV service
+--------------
 
-Status: being built on the webdav branch. Nothing below is in a published image yet. When
-it ships, the deployment assumption "never exposed to the internet" still holds for the
-admin UI, but no longer for the WebDAV service, which is meant to be reached through a
-Cloudflare Tunnel and Traefik.
+The deployment assumption "never exposed to the internet" still holds for the admin UI. It
+does not hold for the optional WebDAV service (smb-dav), which is meant to be reached
+through a Cloudflare Tunnel and Traefik (Pangolin) with the proxy's own login bypassed.
 
-New exposure and trade-offs:
+New exposure and accepted trade-offs:
 
 - An internet-reachable endpoint protected only by a password. WebDAV clients (iOS Files,
   macOS Finder, Windows, Cryptomator) can only send HTTP Basic credentials, so the reverse
   proxy's own login (passkeys, OIDC) has to be bypassed for this hostname.
 - Basic auth has no second factor, and the password goes with every request (inside TLS).
-  TLS ends at Cloudflare, which sees the requests in plain text.
-- The WebDAV password is the user's SMB password. A leaked WebDAV password is also an SMB
-  password on the LAN.
+  TLS ends at Cloudflare, which sees the requests in plain text; Cloudflare to cloudflared
+  is the tunnel, and cloudflared to Traefik to smb-dav is plain HTTP on your host.
+- The WebDAV password is the user's SMB password, and Samba stores it as an unsalted NT
+  hash. A leaked WebDAV password is also an SMB password on the LAN. Use 16 or more random
+  characters for users with remote access.
 - A per-user lockout lets an attacker slow down a user's new logins. Clients that already
-  hold a verified password keep working.
+  hold a verified password keep working (see the cache below).
+- Anything that can connect to port 8094 from inside DAV_TRUSTED_PROXIES can claim any
+  client address and HTTPS. With Pangolin that range is Traefik's Docker network, which also
+  contains the Docker gateway, so other containers on that network and processes on the
+  host are trusted this way. They still need a valid password, and the per-user throttle
+  still applies. Keep the range as narrow as your setup allows.
 
-Controls (each has a test):
+Controls (each has a test, unit or against the built image):
 
-- Off by default. Only shares named in DAV_EXPOSED_SHARES are served, only their folders
-  are mounted into the WebDAV container, and a share that covers a whole volume is refused.
-- Only users with the remote_access flag (default off) can log in. Use 16 or more random
-  characters for their passwords.
-- Separate container and process, running as DAV_UID with no capabilities,
-  no-new-privileges and a read-only root filesystem. It can't reach ./data, the admin
-  socket or /mnt/timenest.
-- The password is checked by a verify-only operation of the root helper, on its own socket
-  that accepts only DAV_UID and serves only that operation. NT hashes never leave the
-  helper and nothing is logged.
-- Basic credentials are refused unless the request arrived over HTTPS. X-Forwarded-Proto and
-  the client IP headers are honoured only from TRUSTED_PROXIES.
-- Login throttle per user and per real client IP (never the proxy's address), exponential
-  backoff up to 15 minutes, bounded memory, generic errors, no password check during a
-  lockout. Audit lines for every success and failure, plus an optional ntfy notification
-  when a lockout starts.
-- Registry changes (user removed, membership or ro/rw changed, password changed) take
-  effect on the next request. Cached credentials are tied to a credential generation.
-- Same fd-based, no-follow path handling as the folder browser. Downloads are never
-  rendered. No HTML listings, no version banner, size limits and timeouts.
-- Overwriting: PUT may replace a file (read-write members only, atomically). MOVE and COPY
-  replace only with an explicit Overwrite: T, only a file onto a file, never a folder.
+- Off by default (compose profile dav). Only shares named in DAV_EXPOSED_SHARES are served
+  (default empty: nothing), only their folders are mounted into the WebDAV container, and
+  a share that covers a whole volume is refused at startup and dropped if it becomes one
+  later. A renamed share is no longer served.
+- Only users with the remote_access flag (default off) can log in. Others get the same
+  401 without a password check, and it counts as a failure.
+- Separate container and process, the same image. Runs as DAV_UID (default 2999, never 0 or
+  PUID) with group smbusers, no capabilities, no-new-privileges, a read-only root filesystem
+  and no env_file, so it never sees ADMIN_PASSWORD. It never imports the admin app, so
+  no admin route exists on its port. It refuses to start as root, as PUID, with any
+  effective capability, with ./data, /mnt/timenest, /import or the admin socket present,
+  or with a whole volume mounted.
+- It reads users and shares only from /run/ssm-dav/acl.json, which the admin app writes
+  atomically on every registry change. The snapshot holds names, share paths, memberships,
+  the remote flag and a credential generation number: no sessions, no hashes, no
+  passwords. A missing or invalid snapshot means every request is refused.
+- Passwords are checked by a verify-only operation of the root helper (user_verify_password)
+  on its own socket, /run/ssm-dav/verify.sock, which accepts only DAV_UID (kernel peer
+  credentials) and serves only that one operation, with a 4 KiB request limit. The helper
+  computes the NT hash of the candidate and compares it with Samba's in constant time.
+  Disabled accounts fail. Hashes never leave the helper, and passwords are never logged.
+- Basic credentials are read only if the request arrived over HTTPS. X-Forwarded-Proto
+  counts only from DAV_TRUSTED_PROXIES (default none). Plain HTTP gets 403 with no
+  WWW-Authenticate, so a client is never invited to send its password in clear text.
+  DAV_ALLOW_HTTP exists for CI only and is refused unless the port is bound to loopback.
+- Login throttle per user and per real client IP: the right-most untrusted
+  X-Forwarded-For entry, or CF-Connecting-IP if configured, both only from trusted proxies.
+  It is never keyed on the proxy's own address; a trusted proxy that sends no client
+  address is refused. Exponential backoff up to 15 minutes, bounded memory (LRU, 4096
+  entries; names that are not real users count against the client address only, so
+  sprayed junk names can't evict a real user's lockout), the same generic 401 for every
+  failure, and no password check at all during a
+  lockout. dav_auth audit lines for ok, fail and locked, dav_lockout when a user's lockout
+  starts, and an optional ntfy notification (at most one per user per hour and 10 per hour
+  in total, sent in the background).
+- Verified credentials are cached for DAV_AUTH_CACHE_S (default 300 s) as an HMAC under a
+  random per-process key, never the password, and each entry is tied to the user's
+  credential generation, which changes before every password change. Authorisation is never
+  cached: membership, ro/rw, user removal, the remote flag and password changes all take
+  effect on the next request. Locks held by a user who is removed or loses remote access
+  are released.
+- Every path is walked component by component from the share folder with
+  openat(O_NOFOLLOW), the same way as the folder browser. Symlinks, devices, FIFOs, the
+  app's temp files and names that fail validation are invisible and unreachable. Control
+  characters, "..", encoded slashes and Destination headers for another host, share or
+  scheme are refused. Read-only members are refused every write in the guard and again in
+  the provider.
+- Overwriting: PUT may replace a file (read-write members only) through a temp file in the
+  same folder and an atomic rename. MOVE and COPY replace only with an explicit
+  Overwrite: T (a missing header counts as F), only a file onto a file, never a folder, a
+  share root or a folder that contains a share, and never onto or into the source. A MOVE
+  across filesystems deletes the source only after the copy is complete.
+- Downloads are application/octet-stream, attachment, nosniff and CSP default-src 'none'
+  with sandbox, and Cache-Control: private, no-store so Cloudflare never caches them. There
+  is no HTML listing and no version banner. Error bodies are short plain text.
+- Limits: request headers 16 KiB, XML bodies 256 KiB (no external entities), uploads
+  DAV_MAX_UPLOAD_MB (checked up front and while streaming), PROPFIND Depth 0 or 1 only, at
+  most 200 locks per user with a 1-hour timeout cap, stored properties at most 16 KiB each
+  and 16 MiB in total, a 60-second socket timeout and a fixed pool of 32 worker threads.
+
+Residual risks:
+
+- Slow clients can hold worker threads for up to the socket timeout. Cloudflare and Traefik
+  in front absorb most of this; a Cloudflare rate-limiting or country rule for the dav
+  hostname is a cheap extra layer.
+- The password check runs at the helper's pace (one at a time); an attacker who spreads
+  guesses over many addresses is slowed by the per-user backoff, not stopped.
+- Cloudflare's free plan caps a request at 100 MB (documented in the README).
 
 What a fully compromised WebDAV process could still do: read and write the files of the
-exposed shares, and ask the helper to check passwords. It could not change shares, users or
-Samba, reach other folders, or get root.
+exposed shares, and ask the helper to check passwords at its pace. It could not change
+shares, users or Samba, reach other folders, ./data or /mnt/timenest, or get root.
 
 
 Known limitations
@@ -192,4 +244,6 @@ Known limitations
   line for a moment, inside the container. Only root and the web user exist there, and
   the web user is already trusted to set that user's password.
 - The trusted-proxy logic takes the right-most untrusted X-Forwarded-For entry. If you put
-  a proxy in front, list it in TRUSTED_PROXIES or the throttle will see only the proxy.
+  a proxy in front of the admin UI, list it in TRUSTED_PROXIES or the throttle will see
+  only the proxy. The WebDAV service refuses a trusted proxy's request without a client
+  address instead.

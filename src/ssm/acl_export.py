@@ -44,13 +44,17 @@ def build_acl(registry: Registry, volumes: list[str]) -> dict[str, Any]:
 
 
 class AclExporter:
-    """Callable used as Registry.on_change. Never raises: a failed export is logged and
-    the WebDAV service keeps the previous snapshot (or refuses requests if there is none)."""
+    """Callable used as Registry.on_change. Never raises. A failed export removes the old
+    snapshot, so the WebDAV service refuses every request rather than serve permissions
+    that may no longer be true; the next successful export brings it back."""
 
-    def __init__(self, registry: Registry, bridge_dir: str, volumes: list[str]) -> None:
+    def __init__(
+        self, registry: Registry, bridge_dir: str, volumes: list[str], gid: int | None = None
+    ) -> None:
         self.registry = registry
         self.bridge_dir = bridge_dir
         self.volumes = list(volumes)
+        self.gid = gid
         self._lock = threading.Lock()
 
     def __call__(self) -> None:
@@ -61,10 +65,25 @@ class AclExporter:
                 self._write(json.dumps(build_acl(self.registry, self.volumes), sort_keys=True))
             except OSError as e:
                 audit.event("acl_export", ok=False, error=e.strerror or str(e))
+                try:
+                    os.unlink(os.path.join(self.bridge_dir, ACL_FILE))
+                except FileNotFoundError:
+                    pass
+                except OSError as e2:
+                    audit.event(
+                        "acl_export",
+                        ok=False,
+                        error="stale snapshot not removed",
+                        detail=e2.strerror or str(e2),
+                    )
 
     def _write(self, text: str) -> None:
         fd, tmp = tempfile.mkstemp(dir=self.bridge_dir, prefix=".acl-", suffix=".tmp")
         try:
+            # The group must be smbusers so the WebDAV container can read it. The setgid
+            # bit on the folder can't be relied on (root without CAP_FSETID loses it).
+            if self.gid is not None and os.fstat(fd).st_gid != self.gid:
+                os.fchown(fd, -1, self.gid)
             with os.fdopen(fd, "w") as f:
                 f.write(text)
                 f.flush()

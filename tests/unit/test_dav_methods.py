@@ -6,9 +6,11 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from ssm.dav import provider
 from tests.unit.dav_harness import LOCK_BODY, Dav, dest
 
 
@@ -375,3 +377,31 @@ def test_server_body_limit_maps_to_413() -> None:
         with pytest.raises(DAVError) as e:
             fn(5)
         assert e.value.value == 413
+
+
+def _proppatch(dav: Dav, value: bytes, name: bytes = b"color") -> Any:
+    body = (
+        b'<?xml version="1.0"?><D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:z">'
+        b"<D:set><D:prop><Z:" + name + b">" + value + b"</Z:" + name + b"></D:prop></D:set>"
+        b"</D:propertyupdate>"
+    )
+    return dav.req(
+        "PROPPATCH", "/Docs/readme.txt", body=body, headers={"Content-Type": "application/xml"}
+    )
+
+
+def test_dead_property_size_is_bounded(dav: Dav, monkeypatch: pytest.MonkeyPatch) -> None:
+    # One oversized value is refused...
+    r = _proppatch(dav, b"x" * (provider.MAX_DEAD_PROP_VALUE + 10))
+    assert r.status == 207 and b"507" in r.body
+    # ...and so is anything past the total budget.
+    monkeypatch.setattr(provider, "MAX_DEAD_PROP_BYTES", 2000)
+    assert b"200" in _proppatch(dav, b"y" * 900, b"a").body
+    assert b"200" in _proppatch(dav, b"y" * 900, b"b").body
+    r = _proppatch(dav, b"y" * 900, b"c")
+    assert b"507" in r.body
+
+
+def test_xml_body_limit(dav: Dav) -> None:
+    r = _proppatch(dav, b"z" * (dav.settings.max_body_bytes + 1))
+    assert r.status == 413

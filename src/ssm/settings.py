@@ -37,6 +37,8 @@ class Settings:
     frontend_dir: str = "/opt/app/frontend"
     server_name: str = "NAS"
     dav_bridge_dir: str = "/run/ssm-dav"
+    # Group of acl.json (smbusers, the WebDAV container's gid). None: leave as created.
+    dav_bridge_gid: int | None = None
 
     def check(self) -> None:
         if not self.admin_password and not self.admin_password_hash:
@@ -71,6 +73,12 @@ def _list(value: str | None) -> list[str]:
     return [x.strip() for x in (value or "").split(",") if x.strip()]
 
 
+def _gid(value: str) -> int:
+    if not value.isdigit() or not 0 < int(value) < 2**31:
+        raise ConfigError("SMB_GID must be a positive integer.")
+    return int(value)
+
+
 def load_settings(env: Mapping[str, str]) -> Settings:
     try:
         max_mb = int(env.get("MAX_UPLOAD_MB", "4096"))
@@ -92,6 +100,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         frontend_dir=env.get("FRONTEND_DIR", "/opt/app/frontend"),
         server_name=env.get("SMB_SERVER_NAME", "NAS"),
         dav_bridge_dir=env.get("DAV_BRIDGE_DIR", "/run/ssm-dav"),
+        dav_bridge_gid=_gid(env.get("SMB_GID", "3000")),
     )
     s.check()
     return s

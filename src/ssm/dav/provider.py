@@ -46,6 +46,7 @@ from wsgidav.dav_error import (
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider
 from wsgidav.lock_man.lock_storage import LockStorageDict
 from wsgidav.prop_man.property_manager import PropertyManager
+from wsgidav.xml_tools import etree
 
 from ssm import audit
 from ssm import validators as v
@@ -56,6 +57,8 @@ FORCE_CROSS_DEVICE = False  # tests flip this to exercise copy-then-delete moves
 MAX_LOCKS_PER_USER = 200
 MAX_LOCK_TIMEOUT = 3600
 MAX_DEAD_PROPS = 20_000
+MAX_DEAD_PROP_VALUE = 16 * 1024  # one property; Finder's are a few hundred bytes
+MAX_DEAD_PROP_BYTES = 16 * 1024 * 1024  # all properties together
 TEMP_PREFIXES = (v.UPLOAD_TEMP_PREFIX, COPY_TEMP_PREFIX)
 CTX_KEY = "ssm.dav.ctx"
 _ROOT_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -776,6 +779,15 @@ class BoundedLockStorage(LockStorageDict):  # type: ignore[misc]
             self.delete(token)
 
 
+def _prop_size(value: Any) -> int:
+    if isinstance(value, (bytes, str)):
+        return len(value)
+    try:
+        return len(etree.tostring(value))
+    except (TypeError, ValueError):
+        return MAX_DEAD_PROP_VALUE + 1  # unknown shape: refuse rather than guess
+
+
 class BoundedPropertyManager(PropertyManager):  # type: ignore[misc]
     """In-memory dead properties (Finder needs PROPPATCH to succeed), with a global cap."""
 
@@ -788,7 +800,12 @@ class BoundedPropertyManager(PropertyManager):  # type: ignore[misc]
         environ: Any = None,
     ) -> None:
         if not dry_run:
-            total = sum(len(d) for d in self._dict.values()) if self._loaded else 0
-            if total >= MAX_DEAD_PROPS:
+            size = _prop_size(property_value)
+            if size > MAX_DEAD_PROP_VALUE:
                 raise DAVError(HTTP_INSUFFICIENT_STORAGE)
+            if self._loaded:
+                count = sum(len(d) for d in self._dict.values())
+                total = sum(_prop_size(x) for d in self._dict.values() for x in d.values())
+                if count >= MAX_DEAD_PROPS or total + size > MAX_DEAD_PROP_BYTES:
+                    raise DAVError(HTTP_INSUFFICIENT_STORAGE)
         super().write_property(norm_url, name, property_value, dry_run=dry_run, environ=environ)

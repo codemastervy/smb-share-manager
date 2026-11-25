@@ -383,3 +383,29 @@ def test_ntfy_send_failure_is_harmless(tmp_path: Path) -> None:
     d.app.auth.notifier.sender = boom  # type: ignore[attr-defined]
     for i in range(7):
         assert _fail(d, client=f"198.51.100.{i + 1}") == 401
+
+
+def test_sprayed_unknown_names_cannot_evict_a_real_lockout(dav: Dav) -> None:
+    """Unknown names count against the client IP only, so a botnet spraying junk names
+    can't push a real user's lockout out of the bounded per-user table."""
+    for i in range(6):
+        dav.req(
+            "PROPFIND",
+            "/",
+            password="wrong-pw-1234",
+            client=f"198.51.100.{i}",
+            headers={"Depth": "0"},
+        )
+    assert dav.app.auth.user_throttle.retry_after("alice", dav.clock()) > 0
+    for i in range(50):
+        r = dav.req(
+            "PROPFIND",
+            "/",
+            user=f"junk{i}",
+            password="x" * 12,
+            client=f"203.0.113.{i}",
+            headers={"Depth": "0"},
+        )
+        assert r.status == 401
+    assert set(dav.app.auth.user_throttle._entries) == {"alice"}
+    assert dav.app.auth.user_throttle.retry_after("alice", dav.clock()) > 0

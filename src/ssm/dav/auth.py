@@ -215,14 +215,19 @@ class Authenticator:
             fields["reason"] = reason
         audit.event("dav_auth", **fields)
 
-    def _failure(self, user: str, client: str, reason: str) -> AuthResult:
+    def _failure(self, user: str, client: str, reason: str, known: bool = True) -> AuthResult:
+        """Count a failure. Names that are not in the snapshot count against the client
+        only: otherwise sprayed junk names could evict a real user's lockout entry from
+        the bounded per-user table."""
         now = self.clock()
+        started, failures = False, 0
         with self._lock:
             self.peer_throttle.record_failure(client, now)
-            before = self.user_throttle.retry_after(user, now) > 0
-            self.user_throttle.record_failure(user, now)
-            failures = self.user_throttle.failures(user)
-            started = not before and self.user_throttle.retry_after(user, now) > 0
+            if known:
+                before = self.user_throttle.retry_after(user, now) > 0
+                self.user_throttle.record_failure(user, now)
+                failures = self.user_throttle.failures(user)
+                started = not before and self.user_throttle.retry_after(user, now) > 0
         self._log("fail", user, client, reason)
         if started:
             audit.event("dav_lockout", user=user, client=client, failures=failures)
@@ -250,7 +255,9 @@ class Authenticator:
 
         if info is None or not info[1]:
             self.sleep(min(self._verify_time, 0.5))
-            return self._failure(log_user, client, "unknown_user" if info is None else "not_remote")
+            if info is None:
+                return self._failure(log_user, client, "unknown_user", known=False)
+            return self._failure(user, client, "not_remote")
 
         start = time.monotonic()
         try:

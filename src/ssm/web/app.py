@@ -140,7 +140,9 @@ def create_app(
 
     data = Path(settings.data_dir) / "app"
     registry = Registry(data / "registry.db")
-    registry.on_change = AclExporter(registry, settings.dav_bridge_dir, volumes)
+    registry.on_change = AclExporter(
+        registry, settings.dav_bridge_dir, volumes, gid=settings.dav_bridge_gid
+    )
     registry.on_change()
     cred = AdminCredential(settings.admin_password, settings.admin_password_hash, data / "secret")
     sessions = SessionManager(registry, cred.fingerprint, clock)

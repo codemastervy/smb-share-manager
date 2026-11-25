@@ -21,7 +21,7 @@ class DavSettings:
     trusted_proxies: list[str] = field(default_factory=list)
     real_ip_header: str = "x-forwarded-for"
     max_upload_bytes: int = 4096 * 1024 * 1024
-    max_body_bytes: int = 1024 * 1024  # PROPFIND, PROPPATCH, LOCK bodies
+    max_body_bytes: int = 256 * 1024  # PROPFIND, PROPPATCH, LOCK bodies
     auth_cache_s: float = 300.0
     allow_http: bool = False  # CI litmus run on loopback only
     bind_addr: str = "0.0.0.0"  # noqa: S104  # nosec B104 - the host side of the port mapping

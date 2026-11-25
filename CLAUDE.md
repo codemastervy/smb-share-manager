@@ -11,8 +11,9 @@ Layout
 
 - src/ssm/web: the admin web app (FastAPI, unprivileged, PUID/PGID). LAN/Tailscale only.
 - src/ssm/helper: the root helper (fixed operation allowlist on unix sockets).
-- src/ssm/dav: the WebDAV service (WsgiDAV + cheroot, its own container, DAV_UID). In
-  development on the webdav branch.
+- src/ssm/dav: the WebDAV service (WsgiDAV + cheroot, its own container, DAV_UID):
+  settings.py, acl.py (snapshot + authorisation), auth.py (throttle, cache, ntfy),
+  app.py (the guard in front of WsgiDAV), provider.py (file operations), main.py.
 - src/ssm/files.py, vpath.py, validators.py: shared, fd-based file operations and input
   validation. Reuse them; don't write path handling again.
 - frontend: the React admin UI (static build, strict CSP).
@@ -101,7 +102,8 @@ Process and container:
 - Its own container and process, same image, started only when enabled. Runs as DAV_UID
   (default 2999) with group smbusers (3000): unprivileged, cap_drop ALL, no cap_add,
   no-new-privileges, read-only root filesystem. It refuses to start as root, as PUID, or
-  with any effective capability.
+  with any effective capability. No env_file: it never sees ADMIN_PASSWORD. Its trusted
+  proxies (DAV_TRUSTED_PROXIES) are separate from the admin app's.
 - Mounts only the folders of the shares named in DAV_EXPOSED_SHARES (default empty: nothing
   is served) and the dav bridge volume. Never ./data, never a whole volume, never
   /mnt/timenest. An exposed share whose path is a volume root is refused at startup.

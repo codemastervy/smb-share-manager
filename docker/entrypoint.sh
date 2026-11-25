@@ -31,11 +31,12 @@ chown "root:$PGID" /run/ssm
 chmod 0750 /run/ssm
 # Bridge to the WebDAV container (named volume): the web app (PUID) writes acl.json, the
 # helper creates verify.sock; group smbusers (the DAV container's gid) may only read and
-# connect. setgid keeps the group on new files. Old contents are cleared on every start.
+# connect. The web app sets acl.json's group itself (root can't set a working setgid bit
+# here without CAP_FSETID). Old contents are cleared on every start.
 if [[ -d /run/ssm-dav ]]; then
   rm -f /run/ssm-dav/verify.sock /run/ssm-dav/acl.json /run/ssm-dav/.acl-*
   chown "$PUID:$SMB_GID" /run/ssm-dav
-  chmod 2750 /run/ssm-dav
+  chmod 0750 /run/ssm-dav
 fi
 
 # The root processes never see the admin password.
