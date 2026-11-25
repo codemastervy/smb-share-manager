@@ -124,7 +124,10 @@ def main() -> None:
         shutdown_timeout=5,
     )
     server.max_request_header_size = MAX_HEADER_BYTES
-    server.max_request_body_size = settings.max_upload_bytes
+    # Body size is enforced by the guard (Content-Length up front, then a byte count while
+    # streaming), which answers 413. cheroot's own limit raises a bare IOError on chunked
+    # bodies that would surface as 500, so it is left off.
+    server.max_request_body_size = 0
 
     def stop(_sig: int, _frame: Any) -> None:
         server.stop()

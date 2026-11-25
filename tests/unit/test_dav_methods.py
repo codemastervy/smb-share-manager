@@ -147,15 +147,15 @@ def mv(dav: Dav, src: str, dst: str, overwrite: str | None = None, method: str =
 
 
 def test_move_rename(dav: Dav) -> None:
-    assert mv(dav, "/Docs/readme.txt", "/Docs/renamed.txt") in (201, 204)
+    assert mv(dav, "/Docs/readme.txt", "/Docs/renamed.txt") == 201
     assert docs(dav) == ["renamed.txt"]
 
 
 def test_copy_file_and_folder(dav: Dav) -> None:
     (dav.vol / "Docs" / "d").mkdir()
     (dav.vol / "Docs" / "d" / "f.txt").write_bytes(b"f")
-    assert mv(dav, "/Docs/readme.txt", "/Docs/copy.txt", method="COPY") in (201, 204)
-    assert mv(dav, "/Docs/d", "/Docs/d2", method="COPY") in (201, 204)
+    assert mv(dav, "/Docs/readme.txt", "/Docs/copy.txt", method="COPY") == 201
+    assert mv(dav, "/Docs/d", "/Docs/d2", method="COPY") == 201
     assert (dav.vol / "Docs" / "d2" / "f.txt").read_bytes() == b"f"
     assert (dav.vol / "Docs" / "copy.txt").read_bytes() == b"hello docs\n"
     assert not [n for n in docs(dav) if n.startswith(".ssm-")]
@@ -178,11 +178,11 @@ def test_overwrite_f_never_replaces(dav: Dav) -> None:
 def test_overwrite_t_file_onto_file(dav: Dav) -> None:
     # The "save to temp, then MOVE over the original" pattern of editors.
     (dav.vol / "Docs" / ".tmp-save").write_bytes(b"new version")
-    assert mv(dav, "/Docs/.tmp-save", "/Docs/readme.txt", "T") in (201, 204)
+    assert mv(dav, "/Docs/.tmp-save", "/Docs/readme.txt", "T") == 204
     assert (dav.vol / "Docs" / "readme.txt").read_bytes() == b"new version"
     assert not (dav.vol / "Docs" / ".tmp-save").exists()
     (dav.vol / "Docs" / "src.txt").write_bytes(b"copy src")
-    assert mv(dav, "/Docs/src.txt", "/Docs/readme.txt", "T", method="COPY") in (201, 204)
+    assert mv(dav, "/Docs/src.txt", "/Docs/readme.txt", "T", method="COPY") == 204
     assert (dav.vol / "Docs" / "readme.txt").read_bytes() == b"copy src"
     assert (dav.vol / "Docs" / "src.txt").exists()
 
@@ -239,7 +239,7 @@ def test_cross_device_move_copies_before_deleting(
     monkeypatch.setattr(provider, "FORCE_CROSS_DEVICE", True)
     (dav.vol / "Docs" / "d").mkdir()
     (dav.vol / "Docs" / "d" / "f.txt").write_bytes(b"f")
-    assert mv(dav, "/Docs/d", "/Docs/e") in (201, 204)
+    assert mv(dav, "/Docs/d", "/Docs/e") == 201
     assert (dav.vol / "Docs" / "e" / "f.txt").read_bytes() == b"f"
     assert not (dav.vol / "Docs" / "d").exists()
     calls: list[str] = []
@@ -355,3 +355,23 @@ def test_proppatch_dead_property_roundtrip(dav: Dav) -> None:
     )
     assert r.status == 207
     assert b"200" in r.body
+
+
+def test_server_body_limit_maps_to_413() -> None:
+    """cheroot raises its own MaxSizeExceeded on chunked bodies; that must be a 413."""
+    from cheroot.errors import MaxSizeExceeded
+    from wsgidav.dav_error import DAVError
+
+    from ssm.dav.app import _LimitedInput
+
+    class Raising:
+        def read(self, size: int = -1) -> bytes:
+            raise MaxSizeExceeded
+
+        readline = read
+
+    inp = _LimitedInput(Raising(), 10)
+    for fn in (inp.read, inp.readline):
+        with pytest.raises(DAVError) as e:
+            fn(5)
+        assert e.value.value == 413

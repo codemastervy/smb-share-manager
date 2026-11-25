@@ -28,6 +28,7 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 from urllib.parse import quote, unquote_to_bytes, urlsplit
 
+from cheroot.errors import MaxSizeExceeded
 from wsgidav.dav_error import DAVError
 from wsgidav.error_printer import ErrorPrinter
 from wsgidav.request_resolver import RequestResolver
@@ -91,6 +92,7 @@ DROP_RESPONSE_HEADERS = frozenset(
     }
 )
 MAX_AUTH_HEADER = 1024
+DEST_EXISTED_KEY = "ssm.dav.dest_existed"
 MAX_USER_LEN = 32
 FINITE_DEPTH_BODY = (
     b'<?xml version="1.0" encoding="utf-8"?>\n'
@@ -148,12 +150,20 @@ class _LimitedInput:
     def read(self, size: int = -1) -> bytes:
         if size is None or size < 0:
             size = self._left + 1
-        return self._check(self._s.read(min(size, self._left + 1)))
+        try:
+            data = self._s.read(min(size, self._left + 1))
+        except MaxSizeExceeded as e:  # cheroot's own body limit
+            raise DAVError(413) from e
+        return self._check(data)
 
     def readline(self, size: int = -1) -> bytes:
         if size is None or size < 0:
             size = self._left + 1
-        return self._check(self._s.readline(min(size, self._left + 1)))
+        try:
+            data = self._s.readline(min(size, self._left + 1))
+        except MaxSizeExceeded as e:
+            raise DAVError(413) from e
+        return self._check(data)
 
     def __iter__(self) -> Iterator[bytes]:
         while True:
@@ -360,6 +370,11 @@ class DavGuard:
         )
         return dparts
 
+    def _probe(self, environ: dict[str, Any]) -> dict[str, Any]:
+        probe = dict(environ)
+        probe["wsgidav.provider"] = self.provider
+        return probe
+
     def _authorise(
         self,
         environ: dict[str, Any],
@@ -388,6 +403,12 @@ class DavGuard:
                 raise _Refuse(404)
             if dhit[1] != "rw" or (method == "MOVE" and access != "rw"):
                 raise _Refuse(403)
+            # WsgiDAV answers 204 for every natively handled COPY/MOVE; remember whether
+            # the destination existed so a new one can be reported as 201 Created.
+            environ[DEST_EXISTED_KEY] = (
+                self.provider.get_resource_inst("/" + "/".join(dparts), self._probe(environ))
+                is not None
+            )
             ov = environ.get("HTTP_OVERWRITE")
             if ov is None:
                 environ["HTTP_OVERWRITE"] = "F"  # stricter than RFC 4918's default
@@ -402,9 +423,7 @@ class DavGuard:
                     403, body=FINITE_DEPTH_BODY, content_type="application/xml; charset=utf-8"
                 )
         if method in ("GET", "HEAD"):
-            probe = dict(environ)
-            probe["wsgidav.provider"] = self.provider
-            res = self.provider.get_resource_inst(path or "/", probe)
+            res = self.provider.get_resource_inst(path or "/", self._probe(environ))
             if res is not None and res.is_collection:
                 raise _Refuse(405, headers=[("Allow", "OPTIONS, PROPFIND")])
 
@@ -464,6 +483,8 @@ class DavGuard:
                 close()
             extra = [(k, val) for k, val in headers if k.lower() in ("allow", "retry-after")]
             return self._send(start_response, _Refuse(code if code < 600 else 500, headers=extra))
+        if method in ("COPY", "MOVE") and code == 204 and not environ.get(DEST_EXISTED_KEY, True):
+            status = "201 Created"
         out = [(k, val) for k, val in headers if k.lower() not in DROP_RESPONSE_HEADERS]
         if method in ("GET", "HEAD") and code in (200, 206) and parts:
             out = [
