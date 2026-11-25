@@ -46,7 +46,8 @@ LOGGABLE_ARGS = ("name", "path")
 
 
 def peer_uid(conn: socket.socket) -> int:
-    if hasattr(socket, "SO_PEERCRED"):
+    # Chosen by platform, not hasattr: cheroot adds a fake socket.SO_PEERCRED on macOS.
+    if sys.platform.startswith("linux"):
         creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
         _pid, uid, _gid = struct.unpack("3i", creds)
         return int(uid)
