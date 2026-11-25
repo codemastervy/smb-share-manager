@@ -582,7 +582,9 @@ def test_trusted_proxy_real_ip_and_lockout(admin: Admin, dsetup: dict[str, Any])
     # Spread over many addresses, failures lock the user (5 free, then backoff).
     for i in range(10, 16):
         via(f"203.0.113.{i}", password=f"wrong-password-{i}")
-    r = via("198.51.100.9", user="davrw")
+    # The user is now locked: a fresh address isn't even checked (Retry-After, no oracle).
+    # (Its correct password would still pass here: it was verified and cached above.)
+    r = via("198.51.100.9", user="davrw", password="another-guess-123")
     assert r.status_code == 401 and "retry-after" in r.headers
     # ...but B's already verified credential keeps working during the lockout.
     assert via("198.51.100.2").status_code == 207
