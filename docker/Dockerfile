@@ -3,7 +3,7 @@
 # Debian packages are deliberately not version-pinned so that the weekly --pull --no-cache
 # rebuild picks up Debian security updates.
 
-FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
+FROM ghcr.io/astral-sh/uv:0.13.10@sha256:a3ea1357342c1a4bf9a0c53a3deb1b55379aefa037338d8113d5771efa01774f AS uv
 
 # ---- build stage: the React UI (npm ci from the lockfile, which pins sha512 integrity) ----
 FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS frontend
