@@ -14,9 +14,13 @@ Layout
 - src/ssm/dav: the WebDAV service (WsgiDAV + cheroot, its own container, DAV_UID):
   settings.py, acl.py (snapshot + authorisation), auth.py (throttle, cache, ntfy),
   app.py (the guard in front of WsgiDAV), provider.py (file operations), main.py.
+- src/ssm/portal: the files portal (FastAPI, its own container, PORTAL_UID): settings.py,
+  app.py (PeerGate, identity, CSRF, file endpoints), main.py. Reuses ssm.dav.acl and
+  ssm.files; never imports the admin app.
 - src/ssm/files.py, vpath.py, validators.py: shared, fd-based file operations and input
   validation. Reuse them; don't write path handling again.
-- frontend: the React admin UI (static build, strict CSP).
+- frontend: the React admin UI (index.html) and the portal page (portal.html, src/portal),
+  one static build, strict CSP.
 - tests/unit, tests/fuzz: run with `uv run pytest`. tests/integration: run in CI against
   the built image (scripts/ci/integration.sh) on exFAT and ext4.
 
@@ -30,7 +34,7 @@ How to work here
 - Before pushing: `uv run ruff check . && uv run ruff format --check . && uv run mypy &&
   uv run bandit -q -r src -c pyproject.toml && uv run pytest`.
 - Don't add features outside the agreed scope. Out of scope: sharing or public links, sync
-  clients, CalDAV/CardDAV, media streaming.
+  clients, CalDAV/CardDAV, media streaming, previews in the portal.
 
 
 Invariants: deployment and updates
@@ -149,3 +153,27 @@ Authorisation and files:
 - Downloads: application/octet-stream, nosniff, CSP default-src 'none' + sandbox,
   attachment. Never an HTML listing. No Server or version banner. Header, body and upload
   size limits (MAX_UPLOAD) and per-request timeouts.
+
+
+Invariants: files portal (internet-reachable, behind Pangolin SSO)
+------------------------------------------------------------------
+
+- Its own container and process, same image, profile portal. Runs as PORTAL_UID (default
+  2998) with group smbusers: never 0, PUID or DAV_UID (the verify socket must never answer
+  it). Same hardening as smb-dav, bridge volume read-only, no env_file, only the exposed
+  share folders mounted.
+- Identity is the Remote-Email header and nothing else, believed only when: the TCP peer
+  is in PORTAL_TRUSTED_PROXIES (required), X-Portal-Proxy-Secret matches
+  PORTAL_PROXY_SECRET (required, constant-time, exactly one copy), X-Forwarded-Proto is
+  exactly https, there is exactly one identity header with one valid address, it maps to
+  exactly one user, and that user has remote_access. Any failure refuses the request.
+- Setup mode until PORTAL_HEADER_VERIFIED=true: no file endpoint and no page, only the
+  probe. Don't add a way around it.
+- Every change needs X-SSM-Portal: 1 and an Origin of https://<PORTAL_HOSTS> equal to Host.
+  GET never changes anything.
+- Authorisation comes from the ACL snapshot on every request, exactly as for WebDAV
+  (exposed shares, never a whole volume, mounted folders only, registry ro/rw).
+- File operations only through ssm.files. Nothing is overwritten; share roots and folders
+  holding a share are protected; downloads are attachment-only with the sandbox CSP.
+- The e-mail column is additive (users.email, unique when not empty, lower case). One
+  e-mail belongs to one user; a snapshot where two users share one maps it to nobody.

@@ -25,10 +25,15 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 from tests.conftest import make_settings  # noqa: E402
 from tests.fakes import FakeHelper  # noqa: E402
 
+from ssm.dav.acl import AclStore  # noqa: E402
+from ssm.portal.app import build_asgi  # noqa: E402
+from ssm.portal.settings import PortalSettings  # noqa: E402
 from ssm.web.app import create_app  # noqa: E402
 
+PORTAL_SECRET = "demo-portal-secret-" + "0" * 32
+
 PW = "demo-admin-password"
-tmp = Path(tempfile.mkdtemp())
+tmp = Path(tempfile.mkdtemp()).resolve()  # the portal wants canonical share paths
 vol = tmp / "files"
 for d in [
     "Family/Photos 2026",
@@ -56,6 +61,7 @@ files = {
 for rel, size in files.items():
     (vol / rel).write_bytes(b"\0" * size)
 (tmp / "data").mkdir()
+(tmp / "bridge").mkdir()
 settings = make_settings(
     tmp,
     vol,
@@ -104,7 +110,7 @@ for name, disp, remote in [
         {"username": name, "password": f"{name}-Demo-Passw0rd!", "display_name": disp},
     )
     if remote:
-        ok("PATCH", f"/api/users/{name}", {"remote_access": True})
+        ok("PATCH", f"/api/users/{name}", {"remote_access": True, "email": f"{name}@example.org"})
 ok(
     "POST",
     "/api/shares",
@@ -158,7 +164,9 @@ def snap(pg, name):
 
 
 with sync_playwright() as pw:
-    browser = pw.chromium.launch(args=["--host-resolver-rules=MAP nas.home 127.0.0.1"])
+    browser = pw.chromium.launch(
+        args=["--host-resolver-rules=MAP nas.home 127.0.0.1, MAP files.example.org 127.0.0.1"]
+    )
     U = "http://nas.home:18095"
     for scheme in ("dark", "light"):
         pg = browser.new_page(viewport={"width": 1280, "height": 800}, device_scale_factor=2)
@@ -205,6 +213,70 @@ with sync_playwright() as pw:
         pg.wait_for_timeout(300)
         snap(pg, f"remote-access{sfx}.png")
         pg.close()
+
+    # --- files portal (as Pangolin would send it: trusted peer, secret, Remote-Email) ----
+    psettings = PortalSettings(
+        hosts=["files.example.org"],
+        exposed_shares=["Family", "Isherveer", "Media"],
+        volumes=[str(vol)],
+        trusted_proxies=["127.0.0.1/32"],
+        proxy_secret=PORTAL_SECRET,
+        header_verified=True,
+        frontend_dir=str(repo / "frontend" / "dist"),
+        bridge_dir=str(tmp / "bridge"),
+    )
+    store = AclStore(
+        str(tmp / "bridge" / "acl.json"),
+        psettings.exposed_shares,
+        [str(vol)],
+        is_mountpoint=lambda p: True,
+    )
+    pserver = uvicorn.Server(
+        uvicorn.Config(
+            build_asgi(psettings, store), host="127.0.0.1", port=18096, log_level="warning"
+        )
+    )
+    threading.Thread(target=pserver.run, daemon=True).start()
+    time.sleep(1)
+    P = "http://files.example.org:18096"
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Portal-Proxy-Secret": PORTAL_SECRET,
+        "Remote-Email": "isherveer@example.org",
+    }
+    for scheme in ("dark", "light"):
+        sfx = "" if scheme == "dark" else "-light"
+        ctx = browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            device_scale_factor=2,
+            extra_http_headers=headers,
+        )
+        ctx.add_init_script(f"localStorage.setItem('ssm-theme', '{scheme}')")
+        pg = ctx.new_page()
+        pg.goto(P + "/")
+        pg.wait_for_selector(".share-card")
+        pg.wait_for_timeout(300)
+        snap(pg, f"portal-home{sfx}.png")
+        pg.goto(P + "/?p=%2FFamily")
+        pg.wait_for_selector(".file-row:has-text('Recipes')")
+        pg.wait_for_timeout(300)
+        snap(pg, f"portal-folder{sfx}.png")
+        ctx.close()
+    ctx = browser.new_context(
+        viewport={"width": 390, "height": 844},
+        device_scale_factor=3,
+        extra_http_headers=headers,
+        is_mobile=True,
+        has_touch=True,
+    )
+    ctx.add_init_script("localStorage.setItem('ssm-theme', 'dark')")
+    pg = ctx.new_page()
+    pg.goto(P + "/?p=%2FFamily%2FPhotos%202026")
+    pg.wait_for_selector(".file-row:has-text('Beach')")
+    pg.wait_for_timeout(300)
+    snap(pg, "portal-phone.png")
+    ctx.close()
+    pserver.should_exit = True
     browser.close()
 server.should_exit = True
 print("done", sorted(p.name for p in out.iterdir()))

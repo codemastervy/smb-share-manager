@@ -5,6 +5,7 @@ Default (main container): the web app answers /healthz and smbd responds to a pi
 --dav (WebDAV container): the ACL snapshot is readable and an unauthenticated OPTIONS is
 refused (401, or 403 "HTTPS required" for plain HTTP from a non-proxy). Never sends a
 password.
+--portal (files portal container): /healthz answers 200 (the ACL snapshot is loaded).
 """
 
 import http.client
@@ -27,6 +28,14 @@ def dav() -> bool:
     return status in (401, 403)
 
 
+def portal() -> bool:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8096/healthz", timeout=4) as r:
+            return bool(r.status == 200)
+    except OSError:
+        return False
+
+
 def main_container() -> bool:
     try:
         with urllib.request.urlopen("http://127.0.0.1:8095/healthz", timeout=4) as r:
@@ -39,4 +48,6 @@ def main_container() -> bool:
     return ok and ping.returncode == 0
 
 
-sys.exit(0 if (dav() if "--dav" in sys.argv[1:] else main_container()) else 1)
+args = sys.argv[1:]
+check = dav if "--dav" in args else portal if "--portal" in args else main_container
+sys.exit(0 if check() else 1)

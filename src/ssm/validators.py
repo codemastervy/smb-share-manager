@@ -23,6 +23,11 @@ class ValidationError(ValueError):
 
 SHARE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}", re.ASCII)
 USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}", re.ASCII)
+# Deliberately narrow: what Pocket ID / Pangolin put in Remote-Email for a family account.
+EMAIL_RE = re.compile(
+    r"[a-z0-9._%+-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
+    re.ASCII,
+)
 
 RESERVED_SHARE_NAMES = frozenset(
     {"global", "globals", "homes", "printers", "print$", "ipc$", "admin$", "c$"}
@@ -120,6 +125,18 @@ def validate_username(name: str) -> str:
     if name in RESERVED_USERNAMES:
         raise ValidationError(f"username {name!r} is reserved")
     return name
+
+
+def validate_email(email: str) -> str:
+    """Lower-cased e-mail address, or ValidationError. Empty is not valid here."""
+    if not isinstance(email, str):
+        raise ValidationError("e-mail must be text")
+    if has_control_chars(email):
+        raise ValidationError("e-mail contains control characters")
+    norm = email.strip().lower()
+    if len(norm) > 254 or not EMAIL_RE.fullmatch(norm):
+        raise ValidationError("not a valid e-mail address")
+    return norm
 
 
 def validate_password(password: str) -> str:

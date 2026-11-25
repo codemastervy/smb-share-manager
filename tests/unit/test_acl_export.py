@@ -15,7 +15,7 @@ import pytest
 
 from ssm.acl_export import AclExporter, build_acl
 from ssm.models import ShareSpec
-from ssm.registry import Registry
+from ssm.registry import Registry, RegistryError
 from tests.conftest import Env, call, login, make_settings
 
 
@@ -267,3 +267,79 @@ def test_settings_smb_gid() -> None:
     for bad in ("0", "-1", "abc"):
         with pytest.raises(ConfigError):
             load_settings({**base, "SMB_GID": bad})
+
+
+# --- files portal: e-mail per user --------------------------------------------------------
+
+
+def test_email_migration_link_and_uniqueness(tmp_path: Path) -> None:
+    r = _reg(tmp_path)
+    hits: list[int] = []
+    r.on_change = lambda: hits.append(1)
+    r.add_user("alice", 1.0)
+    r.add_user("bob", 1.0)
+    assert r.user_emails() == {}
+    r.set_email("alice", "alice@example.org")
+    assert r.user_emails() == {"alice": "alice@example.org"}
+    with pytest.raises(RegistryError, match="already linked"):
+        r.set_email("bob", "alice@example.org")
+    r.set_email("alice", "")
+    r.set_email("bob", "alice@example.org")  # free again once unlinked
+    r.set_email("alice", "")  # many users may have no e-mail
+    assert r.user_emails() == {"bob": "alice@example.org"}
+    assert len(hits) == 6
+    acl = build_acl(r, [])
+    assert acl["users"]["bob"]["email"] == "alice@example.org"
+    assert acl["users"]["alice"]["email"] == ""
+
+
+def test_validate_email() -> None:
+    from ssm import validators as v
+
+    assert v.validate_email("  Alice.B+x@Example.ORG ") == "alice.b+x@example.org"
+    for bad in (
+        "",
+        "alice",
+        "a@b",
+        "a b@c.org",
+        "a@-x.org",
+        "a@x..org",
+        "<a>@x.org",
+        "a@x.org\n",
+        "x" * 65 + "@x.org",
+    ):
+        with pytest.raises(v.ValidationError):
+            v.validate_email(bad)
+
+
+def test_api_email(bridge_env: Env) -> None:
+    c = bridge_env.make_client(bridge_env.settings)
+    csrf = login(c)
+    r = call(
+        c,
+        "post",
+        "/api/users",
+        csrf,
+        json={"username": "alice", "password": "a" * 12, "email": "Alice@Example.org"},
+    )
+    assert r.status_code == 201
+    assert c.get("/api/users").json()["users"][0]["email"] == "alice@example.org"
+    assert _acl(bridge_env)["users"]["alice"]["email"] == "alice@example.org"
+    r = call(
+        c,
+        "post",
+        "/api/users",
+        csrf,
+        json={"username": "bob", "password": "b" * 12, "email": "alice@example.org"},
+    )
+    assert r.status_code == 409
+    assert not any(u["username"] == "bob" for u in c.get("/api/users").json()["users"])
+    r = call(c, "post", "/api/users", csrf, json={"username": "bob", "password": "b" * 12})
+    assert r.status_code == 201
+    r = call(c, "patch", "/api/users/bob", csrf, json={"email": "alice@example.org"})
+    assert r.status_code == 409
+    r = call(c, "patch", "/api/users/bob", csrf, json={"email": "not an email"})
+    assert r.status_code == 400
+    r = call(c, "patch", "/api/users/alice", csrf, json={"email": ""})
+    assert r.status_code == 200
+    assert _acl(bridge_env)["users"]["alice"]["email"] == ""

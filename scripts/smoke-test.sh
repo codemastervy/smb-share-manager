@@ -179,6 +179,50 @@ else
   fi
 fi
 
+# 9. Files portal (optional).
+PORTAL_CONTAINER="${PORTAL_CONTAINER:-smb-portal}"
+PORTAL_LOCAL_URL="${PORTAL_LOCAL_URL:-http://127.0.0.1:${PORTAL_PORT:-8096}}"
+portal_state() { "${DOCKER[@]}" inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$PORTAL_CONTAINER" 2>/dev/null; }
+pstate=$(portal_state)
+for _ in $(seq 1 30); do [[ "$pstate" == "running starting" ]] || break; sleep 2; pstate=$(portal_state); done
+if [[ -z "$pstate" ]]; then
+  ok "files portal not enabled (no $PORTAL_CONTAINER container)"
+else
+  [[ "$pstate" == "running healthy" ]] && ok "container $PORTAL_CONTAINER is running and healthy" \
+    || fail "container $PORTAL_CONTAINER is '$pstate'"
+  hard=$("${DOCKER[@]}" inspect -f '{{.HostConfig.ReadonlyRootfs}}|{{.HostConfig.CapAdd}}|{{.HostConfig.CapDrop}}|{{.Config.User}}|{{.HostConfig.SecurityOpt}}' "$PORTAL_CONTAINER" 2>/dev/null)
+  IFS='|' read -r ro capadd capdrop puser secopt <<<"$hard"
+  if [[ "$ro" == true && ( "$capadd" == "[]" || "$capadd" == "<no value>" ) && "$capdrop" == *ALL* \
+        && -n "$puser" && "${puser%%:*}" != 0 && "${puser%%:*}" != root && "$secopt" == *no-new-privileges* ]]; then
+    ok "$PORTAL_CONTAINER: read-only, no capabilities, no-new-privileges, user $puser"
+  else
+    fail "$PORTAL_CONTAINER hardening: read_only=$ro cap_add=$capadd cap_drop=$capdrop user=$puser security_opt=$secopt"
+  fi
+  if "${DOCKER[@]}" exec "$PORTAL_CONTAINER" sh -c 'test -e /data || test -e /mnt/timenest || test -e /run/ssm' 2>/dev/null; then
+    fail "$PORTAL_CONTAINER can see /data, /mnt/timenest or the admin socket"
+  else
+    ok "$PORTAL_CONTAINER has no /data, /mnt/timenest or admin socket"
+  fi
+  if "${DOCKER[@]}" exec "$PORTAL_CONTAINER" sh -c 'env | grep -q "^ADMIN_PASSWORD"' 2>/dev/null; then
+    fail "$PORTAL_CONTAINER has ADMIN_PASSWORD in its environment"
+  else
+    ok "$PORTAL_CONTAINER does not get the admin password"
+  fi
+  # From this host we are not the trusted proxy and don't send the secret: a forged
+  # identity must get nothing.
+  pcode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    -H 'X-Forwarded-Proto: https' -H 'Remote-Email: spoof@example.invalid' \
+    "$PORTAL_LOCAL_URL/api/portal/me")
+  [[ "$pcode" == 403 || "$pcode" == 400 ]] && ok "a forged identity sent straight to the portal is refused ($pcode)" \
+    || fail "a forged identity sent straight to $PORTAL_LOCAL_URL got HTTP $pcode"
+  verified=$("${DOCKER[@]}" exec "$PORTAL_CONTAINER" sh -c 'echo "$PORTAL_HEADER_VERIFIED"' 2>/dev/null || true)
+  if [[ "$verified" == true ]]; then
+    ok "portal is live (PORTAL_HEADER_VERIFIED=true)"
+  else
+    warn "portal is in setup mode: run scripts/portal-spoof-test.sh https://files.<domain>, then set PORTAL_HEADER_VERIFIED=true"
+  fi
+fi
+
 if (( failed )); then
   echo "RESULT: FAIL"
   exit 1

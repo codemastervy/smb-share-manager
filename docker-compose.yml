@@ -116,5 +116,60 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Files portal: the shares in a web browser at files.<domain>, behind Pangolin single
+  # sign-on. Started only with COMPOSE_PROFILES containing "portal". See README "Files
+  # portal". It starts in setup mode (no files reachable) until PORTAL_HEADER_VERIFIED=true.
+  smb-portal:
+    image: ghcr.io/codemastervy/smb-share-manager:latest
+    container_name: smb-portal
+    profiles: [portal]
+    restart: unless-stopped
+    depends_on:
+      smb-share-manager:
+        condition: service_healthy
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["/opt/venv/bin/python", "-m", "ssm.portal.main"]
+    # Its own uid (never 0, PUID or DAV_UID: the password-check socket won't answer it)
+    # and group smbusers (3000).
+    user: "${PORTAL_UID:-2998}:3000"
+    # No env_file on purpose: this container never sees ADMIN_PASSWORD.
+    environment:
+      PORTAL_HOSTS: ${PORTAL_HOSTS:-}
+      PORTAL_EXPOSED_SHARES: ${PORTAL_EXPOSED_SHARES:-${DAV_EXPOSED_SHARES:-}}
+      PORTAL_TRUSTED_PROXIES: ${PORTAL_TRUSTED_PROXIES:-${DAV_TRUSTED_PROXIES:-${TRUSTED_PROXIES:-}}}
+      PORTAL_PROXY_SECRET: ${PORTAL_PROXY_SECRET:-}
+      PORTAL_IDENTITY_HEADER: ${PORTAL_IDENTITY_HEADER:-remote-email}
+      PORTAL_HEADER_VERIFIED: ${PORTAL_HEADER_VERIFIED:-false}
+      PORTAL_MAX_UPLOAD_MB: ${PORTAL_MAX_UPLOAD_MB:-${DAV_MAX_UPLOAD_MB:-${MAX_UPLOAD_MB:-4096}}}
+      VOLUMES: ${VOLUMES:-}
+      PUID: ${PUID:-1000}
+      DAV_UID: ${DAV_UID:-2999}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${PORTAL_BIND_ADDR:-0.0.0.0}:${PORTAL_PORT:-8096}:8096"
+    volumes:
+      - dav-bridge:/run/ssm-dav:ro
+      # The same share-folder lines as smb-dav (only the exposed shares), for example:
+      # - /mnt/files/Family:/mnt/files/Family
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "/usr/local/bin/healthcheck.py", "--portal"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   dav-bridge:

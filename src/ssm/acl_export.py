@@ -3,8 +3,8 @@
 The WebDAV container never opens the registry database: it would need write access to
 SQLite's WAL files, could read the admin sessions table, and /data is not mounted there.
 Instead the admin app writes this small JSON file atomically after every registry change.
-It contains no secrets: user names, their credential generation and remote-access flag,
-and each share's name, path, members and all-users access.
+It contains no secrets: user names, their credential generation, remote-access flag and
+portal e-mail, and each share's name, path, members and all-users access.
 """
 
 from __future__ import annotations
@@ -24,11 +24,12 @@ FORMAT = 1
 
 
 def build_acl(registry: Registry, volumes: list[str]) -> dict[str, Any]:
+    emails = registry.user_emails()
     return {
         "format": FORMAT,
         "volumes": list(volumes),
         "users": {
-            name: {"cred": gen, "remote": remote}
+            name: {"cred": gen, "remote": remote, "email": emails.get(name, "")}
             for name, (gen, remote) in sorted(registry.user_flags().items())
         },
         "shares": [

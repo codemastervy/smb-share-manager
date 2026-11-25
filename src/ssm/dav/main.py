@@ -13,14 +13,14 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
 from cheroot import wsgi
 
 from ssm import audit
 from ssm.dav.acl import AclStore, is_volume_root, system_mountpoints
 from ssm.dav.app import build_app
-from ssm.dav.settings import DavSettings, load_dav_settings
+from ssm.dav.settings import load_dav_settings
 from ssm.helper_client import VerifyClient
 from ssm.settings import ConfigError
 
@@ -32,7 +32,12 @@ class StartupError(Exception):
     pass
 
 
-def _proc_status() -> dict[str, str]:
+class _HasVolumes(Protocol):
+    @property
+    def volumes(self) -> list[str]: ...
+
+
+def proc_status() -> dict[str, str]:
     try:
         with open("/proc/self/status", encoding="ascii", errors="replace") as f:
             return dict(
@@ -43,7 +48,7 @@ def _proc_status() -> dict[str, str]:
 
 
 def startup_checks(
-    settings: DavSettings,
+    settings: _HasVolumes,
     store: AclStore,
     uid: int,
     puid: int,
@@ -51,6 +56,7 @@ def startup_checks(
     mounts: set[str],
     exists: Callable[[str], bool] = os.path.lexists,
     no_new_privs: bool | None = None,
+    what: str = "WebDAV",
 ) -> None:
     if uid == 0:
         raise StartupError("refusing to run as root; set user: DAV_UID:3000 in compose")
@@ -62,7 +68,7 @@ def startup_checks(
         raise StartupError("refusing to run without no-new-privileges")
     for p in FORBIDDEN_PATHS:
         if p in mounts or exists(p):
-            raise StartupError(f"{p} must not be mounted into the WebDAV container")
+            raise StartupError(f"{p} must not be mounted into the {what} container")
     for m in mounts:
         if is_volume_root(m, settings.volumes):
             raise StartupError(
@@ -75,7 +81,7 @@ def startup_checks(
         )
 
 
-def _wait_for_snapshot(store: AclStore, seconds: float = 60.0) -> None:
+def wait_for_snapshot(store: AclStore, seconds: float = 60.0) -> None:
     deadline = time.monotonic() + seconds
     while store.current() is None and time.monotonic() < deadline:
         time.sleep(1)
@@ -91,8 +97,8 @@ def main() -> None:
     store = AclStore(
         os.path.join(settings.bridge_dir, "acl.json"), settings.exposed_shares, settings.volumes
     )
-    _wait_for_snapshot(store)
-    status = _proc_status()
+    wait_for_snapshot(store)
+    status = proc_status()
     cap = status.get("CapEff")
     nnp = status.get("NoNewPrivs")
     try:

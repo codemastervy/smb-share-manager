@@ -28,6 +28,9 @@ What it does:
 - a warning when a folder is on exFAT/FAT/NTFS, where access is enforced by Samba at share
   level only
 - light and dark mode, works on a phone (long-press opens the menu)
+- optional, off by default: WebDAV access from outside (iOS Files, Finder, rclone) and a
+  files portal in the browser behind Pangolin single sign-on, both limited to the shares
+  and users you choose
 
 It deliberately does nothing else: no system stats, no app launcher, no terminal, no file
 preview, no telemetry and no update checks. It makes no network calls of its own.
@@ -498,6 +501,114 @@ can be changed.
   members, or the user isn't a member.
 - 503: the main container is down or restarting (smb-dav needs its password check and its
   snapshot of users and shares).
+
+
+Files portal (browser access from outside)
+------------------------------------------
+
+A third optional service (same image, container smb-portal, port 8096) shows the exposed
+shares in a web browser at files.<your domain>: browse, download, upload, new folder,
+rename, delete. People sign in through Pangolin's single sign-on (Pocket ID), not with
+their SMB password, so it works on any computer or phone with nothing to install.
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/portal-folder-light.png">
+  <img alt="Files portal: inside a shared folder" src="docs/screenshots/portal-folder.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/portal-home-light.png">
+  <img alt="Files portal: the shares you can use" src="docs/screenshots/portal-home.png">
+</picture>
+
+<img alt="Files portal on a phone" src="docs/screenshots/portal-phone.png" width="300">
+
+It uses the same rules as WebDAV: only the shares in the exposed list (PORTAL_EXPOSED_SHARES,
+by default the same as DAV_EXPOSED_SHARES), only to users with Remote access ticked, with
+exactly their read-only or read & write access, re-checked on every request. On top of that
+it never overwrites anything (an upload with an existing name becomes "name (1).ext"), files
+are always downloaded and never opened in the page, and shared folders can't be deleted or
+renamed from it.
+
+How a request travels:
+
+```
+browser --HTTPS--> Cloudflare --tunnel--> cloudflared --> Traefik/Pangolin (SSO) --HTTP--> smb-portal :8096
+                                                          adds Remote-Email and X-Portal-Proxy-Secret
+```
+
+The portal knows who you are only from the Remote-Email header that Pangolin adds after you
+sign in. A header is only as trustworthy as whoever set it, so the portal believes it only
+when all of these hold, and refuses the request otherwise:
+
+- the connection comes from an address in PORTAL_TRUSTED_PROXIES,
+- it carries PORTAL_PROXY_SECRET in X-Portal-Proxy-Secret (a custom header you set on the
+  Pangolin resource; without it, any other container on Traefik's network could pose as
+  Pangolin),
+- it came in over HTTPS, and there is exactly one Remote-Email holding one address,
+- that address is linked to a user in the admin UI, and that user has Remote access.
+
+Until you have proved on your own setup that Pangolin can't be tricked into passing a forged
+Remote-Email (step 5), the portal runs in setup mode and serves no files at all.
+
+### Setting it up
+
+1. .env (the shares are the ones you already expose over WebDAV unless you set
+   PORTAL_EXPOSED_SHARES):
+
+   ```
+   COMPOSE_PROFILES=dav,portal
+   PORTAL_HOSTS=files.example.org
+   PORTAL_TRUSTED_PROXIES=192.168.0.0/18
+   PORTAL_PROXY_SECRET=<output of: openssl rand -hex 32>
+   PORTAL_HEADER_VERIFIED=false
+   ```
+
+2. Add the same share-folder lines you gave smb-dav to smb-portal in docker-compose.yml:
+
+   ```yaml
+     smb-portal:
+       volumes:
+         - dav-bridge:/run/ssm-dav:ro
+         - /mnt/files/Family:/mnt/files/Family
+   ```
+
+3. In the admin UI, Users, edit each person: put the e-mail they sign in to Pangolin with in
+   **Sign-in e-mail (files portal)** and tick **Remote access**. One address per user.
+
+4. In Pangolin, add a resource for files.<your domain> pointing at
+   http://<server LAN IP>:8096. Leave Pangolin's authentication **on** (SSO with your
+   identity provider; Pangolin forwards Remote-Email only for SSO-protected resources).
+   Under the resource's custom headers, add `X-Portal-Proxy-Secret` with the value of
+   PORTAL_PROXY_SECRET.
+
+5. Start it (setup mode), sign in at https://files.example.org in a browser, and run the
+   spoof test from any computer. It needs the browser's Cookie header for the portal
+   (DevTools, Network, any request, Request Headers, cookie); it reads it without echo.
+
+   ```bash
+   docker compose up -d
+   scripts/portal-spoof-test.sh https://files.example.org
+   ```
+
+   Only if it ends with "RESULT: safe", set `PORTAL_HEADER_VERIFIED=true` in .env and run
+   `docker compose up -d` again. Run the test again after any Pangolin or Traefik upgrade.
+
+Optional settings (.env): PORTAL_PORT and PORTAL_BIND_ADDR, PORTAL_MAX_UPLOAD_MB (default
+DAV_MAX_UPLOAD_MB), PORTAL_IDENTITY_HEADER (default remote-email), PORTAL_UID (default
+2998; must differ from PUID and DAV_UID).
+
+### Troubleshooting
+
+- "setup mode": PORTAL_HEADER_VERIFIED is still false (step 5).
+- Plain "Forbidden": the request didn't come from PORTAL_TRUSTED_PROXIES or didn't carry the
+  right X-Portal-Proxy-Secret. `docker logs smb-portal` shows `portal_refused` with the
+  reason and the proxy's address.
+- "not linked to a file account": the e-mail Pangolin sent isn't set on any user, or two
+  users have it.
+- A share is missing: same reasons as for WebDAV (not exposed, not mounted into
+  smb-portal, no membership).
+- Uploads over 100 MB fail from outside: Cloudflare's free plan limit, as with WebDAV.
 
 
 Updating and rolling back

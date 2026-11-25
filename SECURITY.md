@@ -231,6 +231,71 @@ exposed shares, and ask the helper to check passwords at its pace. It could not 
 shares, users or Samba, reach other folders, ./data or /mnt/timenest, or get root.
 
 
+Files portal
+------------
+
+Optional third container (smb-portal, profile portal), meant to be reachable from the
+internet behind Pangolin single sign-on. It serves the exposed shares to a browser.
+
+Trade-off: the portal does not authenticate anyone itself. It trusts one request header,
+Remote-Email, which Pangolin sets after its sign-in. Everything below exists to make sure
+that header can only come from Pangolin.
+
+Who it believes:
+
+- PeerGate, before any header is read: the TCP peer must be in PORTAL_TRUSTED_PROXIES
+  (required; 0.0.0.0/0 refused) and the request must carry PORTAL_PROXY_SECRET in
+  X-Portal-Proxy-Secret, compared in constant time, exactly once. The secret is needed
+  because the trusted range is normally a whole Docker network: any other container on
+  it could otherwise send its own Remote-Email. Then X-Forwarded-Proto must be exactly
+  "https". Anything else gets a bare 403. Only /healthz is exempt; it reveals nothing.
+- Exactly one Remote-Email header with exactly one address (no commas), validated and
+  lower-cased. Two copies mean a proxy appended instead of replacing, so the request is
+  refused.
+- The address must belong to exactly one user in the ACL snapshot (an address claimed by
+  two users maps to nobody), and that user must have remote_access.
+- Setup mode: until PORTAL_HEADER_VERIFIED=true no file endpoint and no page is served,
+  only /api/portal/probe, which echoes the identity values it received (to the same
+  requester, through the proxy) so that scripts/portal-spoof-test.sh can show whether
+  Pangolin passes a forged header through. The owner sets the flag only after that test
+  passes against the live setup.
+
+Requests and files:
+
+- CSRF: sign-in is ambient (Pangolin's cookie), so every change needs X-SSM-Portal: 1 (a
+  cross-site page can't send it without a CORS preflight, which is never granted) and an
+  Origin of https://<PORTAL_HOSTS entry> matching Host. Changes are POST or PUT only.
+- Host allow-list, the admin app's CSP and security headers, no Server header. JSON bodies
+  are capped at 64 KiB; uploads at PORTAL_MAX_UPLOAD_MB, checked up front and while
+  streaming.
+- Authorisation is the WebDAV service's: same snapshot, exposed shares only, never a whole
+  volume, only folders mounted into the container, the registry's ro/rw on every request.
+- File work is ssm.files (fd-based, O_NOFOLLOW, control characters refused). Nothing is
+  overwritten: uploads get "name (1).ext", renames never replace. Share roots and folders
+  that are or contain a share can't be renamed or deleted. Symlinks and temporary files
+  are never listed. Downloads are attachment, octet-stream, nosniff, CSP sandbox.
+
+Process and container: its own uid (PORTAL_UID, default 2998; it refuses to run as root,
+PUID or DAV_UID, so the helper's password-check socket never answers it), group smbusers,
+umask 0002, cap_drop ALL, no-new-privileges, read-only root filesystem, the bridge volume
+read-only, no env_file (it never sees ADMIN_PASSWORD), only the exposed share folders.
+
+Residual risks:
+
+- The portal is exactly as safe as Pangolin's sign-in and its identity provider. Anyone who
+  can sign in as a family member's e-mail gets that member's files. Use passkeys or 2FA in
+  Pocket ID.
+- If Pangolin's handling of Remote-Email changes in an upgrade, the spoof test result no
+  longer holds. Run it again after upgrading Pangolin or Traefik.
+- Anyone who learns PORTAL_PROXY_SECRET and can reach port 8096 from inside
+  PORTAL_TRUSTED_PROXIES can pose as any user. Keep it out of shared files; rotate it in
+  .env and in Pangolin if it leaks.
+
+What a fully compromised portal process could still do: read and write the files of the
+exposed shares. It could not check passwords, change shares, users or Samba, or reach
+./data, the admin socket or /mnt/timenest.
+
+
 Known limitations
 -----------------
 

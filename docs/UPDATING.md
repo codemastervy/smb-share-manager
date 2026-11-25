@@ -116,6 +116,22 @@ Rolling back to an image older than the WebDAV release: remove COMPOSE_PROFILES=
 credential generation) are additive, so older images just ignore them.
 
 
+Files portal
+------------
+
+smb-portal (COMPOSE_PROFILES containing portal) is updated the same way as smb-dav: same
+image, same pull, no state of its own. Keep its share-folder lines when you take a new
+docker-compose.yml.
+
+After upgrading Pangolin or Traefik (not this image), run scripts/portal-spoof-test.sh
+again: the portal trusts Pangolin's Remote-Email header, and the test is what proves a
+forged one can't get through. If it fails, set PORTAL_HEADER_VERIFIED=false and run
+`docker compose up -d` until it passes again.
+
+Rolling back to an image older than the portal release: remove portal from
+COMPOSE_PROFILES first. The users.email column is additive and ignored by older images.
+
+
 After an update: smoke test
 ---------------------------
 
@@ -141,6 +157,9 @@ WARN or FAIL per check and exits non-zero on any FAIL. The checks:
   is refused before any password is asked for, there is no version banner, and the admin
   API is not served on it. With DAV_URL=https://dav.example.org set, SMB_USER logs in over
   WebDAV and sees the share, and the admin API is not reachable through that hostname.
+- if smb-portal exists: it is healthy and hardened the same way, a forged Remote-Email
+  sent straight to its port (not through Pangolin, without the proxy secret) is refused,
+  and whether it is still in setup mode.
 
 If it reports FAIL, roll back (next section) and open an issue with the output of
 docker compose logs --tail 200.

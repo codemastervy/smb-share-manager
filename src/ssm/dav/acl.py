@@ -17,7 +17,7 @@ import json
 import os
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ssm import audit
@@ -47,6 +47,10 @@ class AclSnapshot:
     users: dict[str, tuple[int, bool]]  # name -> (credential generation, remote access)
     served: dict[str, DavShare]  # casefolded name -> share
     share_paths: tuple[str, ...]  # every registry share path (for "protected" checks)
+    emails: dict[str, str] = field(default_factory=dict)  # e-mail -> user (files portal)
+
+    def user_by_email(self, email: str) -> str | None:
+        return self.emails.get(email)
 
     def user(self, name: str) -> tuple[int, bool] | None:
         return self.users.get(name)
@@ -66,6 +70,23 @@ class AclSnapshot:
 
 class AclError(ValueError):
     pass
+
+
+def _emails(users_raw: dict[str, Any]) -> dict[str, str]:
+    """e-mail -> user. An address claimed by two users maps to nobody (fail closed)."""
+    seen: dict[str, str | None] = {}
+    for name, u in users_raw.items():
+        email = u.get("email", "")
+        if not isinstance(email, str):
+            raise AclError("bad user entry")
+        if not email:
+            continue
+        try:
+            email = v.validate_email(email)
+        except v.ValidationError:
+            continue
+        seen[email] = None if email in seen else name
+    return {e: n for e, n in seen.items() if n is not None}
 
 
 def _parse(raw: Any) -> tuple[dict[str, tuple[int, bool]], list[DavShare], list[str]]:
@@ -185,6 +206,7 @@ class AclStore:
             with open(self.path, encoding="utf-8") as f:
                 raw = json.load(f)
             users, shares, vols = _parse(raw)
+            emails = _emails(raw["users"])
         except (OSError, ValueError) as e:
             audit.event("dav_acl", ok=False, error=type(e).__name__)
             self._set(key, None)
@@ -203,7 +225,7 @@ class AclStore:
                 audit.event("dav_share_refused", share=s.name, reason="not_mounted")
                 continue
             served[s.name.casefold()] = s
-        snap = AclSnapshot(users, served, tuple(s.path for s in shares))
+        snap = AclSnapshot(users, served, tuple(s.path for s in shares), emails)
         self.all_shares = shares
         self.all_volumes = volumes
         self._set(key, snap)

@@ -98,6 +98,11 @@ class Registry:
                 self._db.execute(
                     "ALTER TABLE users ADD COLUMN remote_access INTEGER NOT NULL DEFAULT 0"
                 )
+            if "email" not in ucols:
+                self._db.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+            self._db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email != ''"
+            )
 
     def close(self) -> None:
         self._db.close()
@@ -170,6 +175,24 @@ class Registry:
             self._db.execute(
                 "UPDATE users SET remote_access = ? WHERE name = ?", (int(enabled), name)
             )
+        self._changed()
+
+    def user_emails(self) -> dict[str, str]:
+        """{name: e-mail} for users that have one (lower case)."""
+        with self._lock:
+            return {
+                r[0]: r[1]
+                for r in self._db.execute("SELECT name, email FROM users WHERE email != ''")
+            }
+
+    def set_email(self, name: str, email: str) -> None:
+        """Link a user to the e-mail the files portal identifies them by ('' unlinks).
+        The caller validates and lower-cases it; one e-mail belongs to one user."""
+        with self._lock:
+            try:
+                self._db.execute("UPDATE users SET email = ? WHERE name = ?", (email, name))
+            except sqlite3.IntegrityError as e:
+                raise RegistryError("that e-mail address is already linked to another user") from e
         self._changed()
 
     def shares_only_reachable_by(self, name: str) -> list[str]:

@@ -30,6 +30,7 @@ dev = [
     "bandit",
     "pip-audit",
     "playwright>=1.63.0",
+    "pyyaml>=6.0.3",
 ]
 
 [build-system]
