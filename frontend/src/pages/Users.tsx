@@ -59,7 +59,10 @@ export function Users({ onMenu }: { onMenu: () => void }) {
                 {users.map((u) => (
                   <tr key={u.username}>
                     <td><strong>{u.display_name}</strong></td>
-                    <td className="mono">{u.username}</td>
+                    <td className="mono">
+                      {u.username}
+                      {u.remote_access && <span className="badge" style={{ marginLeft: 6 }}>remote</span>}
+                    </td>
                     <td>
                       {!u.shares?.length ? <span className="hint">none</span> : (
                         <div className="row wrap" style={{ gap: 4 }}>
@@ -140,6 +143,8 @@ function UserDialog({ user, onClose, onDone }: {
   const [username, setUsername] = useState(user?.username ?? '')
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
   const [password, setPassword] = useState('')
+  const [remote, setRemote] = useState(!!user?.remote_access)
+  const [email, setEmail] = useState(user?.email ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
@@ -150,11 +155,13 @@ function UserDialog({ user, onClose, onDone }: {
       if (user) {
         await api.updateUser(user.username, {
           display_name: displayName,
+          remote_access: remote,
+          email: email.trim(),
           ...(password ? { password } : {}),
         })
         toast('User updated', 'ok')
       } else {
-        await api.createUser({ username: username.trim().toLowerCase(), password, display_name: displayName })
+        await api.createUser({ username: username.trim().toLowerCase(), password, display_name: displayName, email: email.trim() })
         toast('User created', 'ok')
       }
       onDone()
@@ -198,6 +205,32 @@ function UserDialog({ user, onClose, onDone }: {
                autoComplete="new-password"
                onChange={(e) => setPassword(e.target.value)} />
         <span className="hint">At least 10 characters.</span>
+      </div>
+
+      {user && (
+        <div className="field">
+          <label className="check">
+            <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} />
+            <span>Remote access (WebDAV)</span>
+          </label>
+          <span className="hint">
+            Lets this user reach their exposed shares from outside the house: over WebDAV with
+            this username and password, and in the files portal after signing in. Only turn it
+            on for users with a password of 16 or more random characters.
+          </span>
+        </div>
+      )}
+
+      <div className="field">
+        <label htmlFor="u-email">Sign-in e-mail (files portal)</label>
+        <input id="u-email" className="input" type="email" value={email}
+               autoComplete="off" spellCheck={false}
+               onChange={(e) => setEmail(e.target.value)}
+               placeholder="The address they sign in to Pangolin with" />
+        <span className="hint">
+          The portal recognises people by this address. Leave it empty to keep them out of the
+          portal. One address per user.
+        </span>
       </div>
 
       {error && <div className="notice danger">{error}</div>}

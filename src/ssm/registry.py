@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +69,17 @@ class Registry:
         self._db.executescript(SCHEMA)
         self._migrate()
         os.chmod(path, 0o600)
+        # Called after every committed change to users or shares (the WebDAV snapshot).
+        self.on_change: Callable[[], None] | None = None
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
+
+    def _next_gen(self, current: int) -> int:
+        """A credential generation larger than any used before (microsecond clock), so a
+        re-created user never repeats a value a cached credential could hold."""
+        return max(current + 1, time.time_ns() // 1000)
 
     def _migrate(self) -> None:
         """Additive, backwards-compatible schema changes only (rollbacks must keep working)."""
@@ -79,6 +92,17 @@ class Registry:
             scols = {r[1] for r in self._db.execute("PRAGMA table_info(shares)")}
             if "created" not in scols:
                 self._db.execute("ALTER TABLE shares ADD COLUMN created REAL NOT NULL DEFAULT 0")
+            if "cred_gen" not in ucols:
+                self._db.execute("ALTER TABLE users ADD COLUMN cred_gen INTEGER NOT NULL DEFAULT 0")
+            if "remote_access" not in ucols:
+                self._db.execute(
+                    "ALTER TABLE users ADD COLUMN remote_access INTEGER NOT NULL DEFAULT 0"
+                )
+            if "email" not in ucols:
+                self._db.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+            self._db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email != ''"
+            )
 
     def close(self) -> None:
         self._db.close()
@@ -109,20 +133,67 @@ class Registry:
             self._db.execute(
                 "UPDATE users SET display_name = ? WHERE name = ?", (display_name, name)
             )
+        self._changed()
 
     def add_user(self, name: str, now: float, display_name: str = "") -> None:
         with self._lock:
             try:
                 self._db.execute(
-                    "INSERT INTO users (name, created, display_name) VALUES (?, ?, ?)",
-                    (name, now, display_name),
+                    "INSERT INTO users (name, created, display_name, cred_gen) VALUES (?, ?, ?, ?)",
+                    (name, now, display_name, self._next_gen(0)),
                 )
             except sqlite3.IntegrityError as e:
                 raise RegistryError(f"user {name!r} already exists") from e
+        self._changed()
 
     def delete_user(self, name: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM users WHERE name = ?", (name,))
+        self._changed()
+
+    def user_flags(self) -> dict[str, tuple[int, bool]]:
+        """{name: (credential generation, remote access)}."""
+        with self._lock:
+            return {
+                r[0]: (int(r[1]), bool(r[2]))
+                for r in self._db.execute("SELECT name, cred_gen, remote_access FROM users")
+            }
+
+    def bump_cred(self, name: str) -> None:
+        """Invalidate every cached WebDAV credential of this user (password change)."""
+        with self._lock:
+            row = self._db.execute("SELECT cred_gen FROM users WHERE name = ?", (name,)).fetchone()
+            if row is None:
+                return
+            self._db.execute(
+                "UPDATE users SET cred_gen = ? WHERE name = ?", (self._next_gen(row[0]), name)
+            )
+        self._changed()
+
+    def set_remote_access(self, name: str, enabled: bool) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE users SET remote_access = ? WHERE name = ?", (int(enabled), name)
+            )
+        self._changed()
+
+    def user_emails(self) -> dict[str, str]:
+        """{name: e-mail} for users that have one (lower case)."""
+        with self._lock:
+            return {
+                r[0]: r[1]
+                for r in self._db.execute("SELECT name, email FROM users WHERE email != ''")
+            }
+
+    def set_email(self, name: str, email: str) -> None:
+        """Link a user to the e-mail the files portal identifies them by ('' unlinks).
+        The caller validates and lower-cases it; one e-mail belongs to one user."""
+        with self._lock:
+            try:
+                self._db.execute("UPDATE users SET email = ? WHERE name = ?", (email, name))
+            except sqlite3.IntegrityError as e:
+                raise RegistryError("that e-mail address is already linked to another user") from e
+        self._changed()
 
     def shares_only_reachable_by(self, name: str) -> list[str]:
         """Shares that would become unreachable if this user were deleted."""
@@ -208,10 +279,12 @@ class Registry:
             except BaseException:
                 cur.execute("ROLLBACK")
                 raise
+        self._changed()
 
     def delete_share(self, name: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM shares WHERE name = ?", (name,))
+        self._changed()
 
     # --- sessions --------------------------------------------------------------------
 

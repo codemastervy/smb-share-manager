@@ -98,6 +98,40 @@ Or simply run the smoke test after each monthly update (see below). It warns whe
 image is more than 14 days old.
 
 
+WebDAV service
+--------------
+
+If you enabled WebDAV (COMPOSE_PROFILES=dav in .env), smb-dav uses the same image as a
+second service in the same compose project, so the monthly `docker compose pull` and
+`docker compose up -d` update and recreate it together with the main container; nothing
+changes in your script. It waits for the main container to be healthy, has its own
+healthcheck, and holds no state: users and shares come from a snapshot the main container
+writes, and locks live in memory only.
+
+Your per-share volume lines in docker-compose.yml are yours: keep them when you take a new
+docker-compose.yml from the repository.
+
+Rolling back to an image older than the WebDAV release: remove COMPOSE_PROFILES=dav from
+.env first (the old image has no WebDAV service). The new registry columns (remote access,
+credential generation) are additive, so older images just ignore them.
+
+
+Files portal
+------------
+
+smb-portal (COMPOSE_PROFILES containing portal) is updated the same way as smb-dav: same
+image, same pull, no state of its own. Keep its share-folder lines when you take a new
+docker-compose.yml.
+
+After upgrading Pangolin or Traefik (not this image), run scripts/portal-spoof-test.sh
+again: the portal trusts Pangolin's Remote-Email header, and the test is what proves a
+forged one can't get through. If it fails, set PORTAL_HEADER_VERIFIED=false and run
+`docker compose up -d` until it passes again.
+
+Rolling back to an image older than the portal release: remove portal from
+COMPOSE_PROFILES first. The users.email column is additive and ignored by older images.
+
+
 After an update: smoke test
 ---------------------------
 
@@ -118,6 +152,14 @@ WARN or FAIL per check and exits non-zero on any FAIL. The checks:
 - anonymous access is refused
 - the SMB user can log in and list the share (smbclient against localhost, run inside the
   container)
+- if smb-dav exists: it is healthy and hardened (read-only, no capabilities,
+  no-new-privileges, not root, no /data or admin password inside), plain HTTP to its port
+  is refused before any password is asked for, there is no version banner, and the admin
+  API is not served on it. With DAV_URL=https://dav.example.org set, SMB_USER logs in over
+  WebDAV and sees the share, and the admin API is not reachable through that hostname.
+- if smb-portal exists: it is healthy and hardened the same way, a forged Remote-Email
+  sent straight to its port (not through Pangolin, without the proxy secret) is refused,
+  and whether it is still in setup mode.
 
 If it reports FAIL, roll back (next section) and open an issue with the output of
 docker compose logs --tail 200.

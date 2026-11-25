@@ -3,7 +3,13 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: 'dist', sourcemap: false, modulePreload: { polyfill: false } },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    modulePreload: { polyfill: false },
+    // Two pages: the admin UI (index.html) and the files portal (portal.html).
+    rollupOptions: { input: { admin: 'index.html', portal: 'portal.html' } },
+  },
   server: {
     port: 5173,
     // `npm run dev` talks to a running container (web UI on port 8095).

@@ -18,6 +18,9 @@ services:
       - "${BIND_ADDR:-0.0.0.0}:${WEB_PORT:-8095}:8095"
     volumes:
       - ./data:/data
+      # Bridge to the WebDAV service (acl.json + the verify-only helper socket). Harmless
+      # when WebDAV is off.
+      - dav-bridge:/run/ssm-dav
       # Only the folders you want to share. Same path inside and outside the container,
       # and list them in VOLUMES in .env. Never mount /, /proc, /sys or /mnt/timenest.
       - /mnt/files:/mnt/files
@@ -56,3 +59,117 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # WebDAV (internet-facing through your reverse proxy). Off unless COMPOSE_PROFILES=dav
+  # is in .env. See README "WebDAV access from outside" and SECURITY.md before enabling.
+  smb-dav:
+    image: ghcr.io/codemastervy/smb-share-manager:latest
+    container_name: smb-dav
+    profiles: [dav]
+    restart: unless-stopped
+    depends_on:
+      smb-share-manager:
+        condition: service_healthy
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["/opt/venv/bin/python", "-m", "ssm.dav.main"]
+    # Dedicated uid (never 0, never PUID) and group smbusers (3000).
+    user: "${DAV_UID:-2999}:3000"
+    # No env_file on purpose: this container never sees ADMIN_PASSWORD.
+    environment:
+      DAV_EXPOSED_SHARES: ${DAV_EXPOSED_SHARES:-}
+      VOLUMES: ${VOLUMES:-}
+      TRUSTED_PROXIES: ${DAV_TRUSTED_PROXIES:-${TRUSTED_PROXIES:-}}
+      DAV_REAL_IP_HEADER: ${DAV_REAL_IP_HEADER:-x-forwarded-for}
+      DAV_MAX_UPLOAD_MB: ${DAV_MAX_UPLOAD_MB:-${MAX_UPLOAD_MB:-4096}}
+      DAV_AUTH_CACHE_S: ${DAV_AUTH_CACHE_S:-300}
+      DAV_BIND_ADDR: ${DAV_BIND_ADDR:-0.0.0.0}
+      DAV_ALLOW_HTTP: ${DAV_ALLOW_HTTP:-false}
+      NTFY_URL: ${NTFY_URL:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      PUID: ${PUID:-1000}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${DAV_BIND_ADDR:-0.0.0.0}:${DAV_PORT:-8094}:8094"
+    volumes:
+      - dav-bridge:/run/ssm-dav:ro
+      # ONLY the folders of the shares in DAV_EXPOSED_SHARES, read-write, at the same path
+      # as the share's path in the admin UI. Never a whole volume (startup refuses it),
+      # never ./data, never /mnt/timenest. One line per exposed share, for example:
+      # - /mnt/files/Family:/mnt/files/Family
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "/usr/local/bin/healthcheck.py", "--dav"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Files portal: the shares in a web browser at files.<domain>, behind Pangolin single
+  # sign-on. Started only with COMPOSE_PROFILES containing "portal". See README "Files
+  # portal". It starts in setup mode (no files reachable) until PORTAL_HEADER_VERIFIED=true.
+  smb-portal:
+    image: ghcr.io/codemastervy/smb-share-manager:latest
+    container_name: smb-portal
+    profiles: [portal]
+    restart: unless-stopped
+    depends_on:
+      smb-share-manager:
+        condition: service_healthy
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["/opt/venv/bin/python", "-m", "ssm.portal.main"]
+    # Its own uid (never 0, PUID or DAV_UID: the password-check socket won't answer it)
+    # and group smbusers (3000).
+    user: "${PORTAL_UID:-2998}:3000"
+    # No env_file on purpose: this container never sees ADMIN_PASSWORD.
+    environment:
+      PORTAL_HOSTS: ${PORTAL_HOSTS:-}
+      PORTAL_EXPOSED_SHARES: ${PORTAL_EXPOSED_SHARES:-${DAV_EXPOSED_SHARES:-}}
+      PORTAL_TRUSTED_PROXIES: ${PORTAL_TRUSTED_PROXIES:-${DAV_TRUSTED_PROXIES:-${TRUSTED_PROXIES:-}}}
+      PORTAL_PROXY_SECRET: ${PORTAL_PROXY_SECRET:-}
+      PORTAL_IDENTITY_HEADER: ${PORTAL_IDENTITY_HEADER:-remote-email}
+      PORTAL_HEADER_VERIFIED: ${PORTAL_HEADER_VERIFIED:-false}
+      PORTAL_MAX_UPLOAD_MB: ${PORTAL_MAX_UPLOAD_MB:-${DAV_MAX_UPLOAD_MB:-${MAX_UPLOAD_MB:-4096}}}
+      VOLUMES: ${VOLUMES:-}
+      PUID: ${PUID:-1000}
+      DAV_UID: ${DAV_UID:-2999}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${PORTAL_BIND_ADDR:-0.0.0.0}:${PORTAL_PORT:-8096}:8096"
+    volumes:
+      - dav-bridge:/run/ssm-dav:ro
+      # The same share-folder lines as smb-dav (only the exposed shares), for example:
+      # - /mnt/files/Family:/mnt/files/Family
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "/usr/local/bin/healthcheck.py", "--portal"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  dav-bridge:

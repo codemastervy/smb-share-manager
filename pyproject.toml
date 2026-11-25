@@ -11,6 +11,8 @@ dependencies = [
     "jinja2",
     "python-multipart",
     "argon2-cffi",
+    "wsgidav>=4.4.1",
+    "cheroot>=11.1.2",
 ]
 
 [project.scripts]
@@ -28,6 +30,7 @@ dev = [
     "bandit",
     "pip-audit",
     "playwright>=1.63.0",
+    "pyyaml>=6.0.3",
 ]
 
 [build-system]
@@ -59,7 +62,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["argon2.*"]
+module = ["argon2.*", "wsgidav.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

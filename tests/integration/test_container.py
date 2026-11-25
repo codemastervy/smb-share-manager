@@ -211,6 +211,9 @@ def test_container_hardening() -> None:
     assert "no-new-privileges:true" in hc["SecurityOpt"]
     assert hc["NetworkMode"] != "host"
     for m in info["Mounts"]:
+        if m["Destination"] == "/run/ssm-dav":  # the WebDAV bridge: a named volume
+            assert m["Type"] == "volume", m
+            continue
         assert m["Destination"] in ("/data", VOL, "/import"), m
         assert m["Source"] not in ("/", "/proc", "/sys")
         assert not m["Source"].startswith(("/proc", "/sys", "/mnt/timenest"))

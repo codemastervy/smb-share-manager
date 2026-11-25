@@ -23,11 +23,12 @@ from pydantic import BaseModel, ConfigDict
 
 from ssm import audit, fsinfo, importer
 from ssm import validators as v
+from ssm.acl_export import AclExporter
 from ssm.auth import AdminCredential, LoginThrottle, SessionManager, client_ip, peer_is_trusted
 from ssm.files import Entry, FileOpError, FileOps
 from ssm.helper_client import Helper, HelperClient, HelperError
 from ssm.models import ShareSpec
-from ssm.registry import Registry, SessionRow
+from ssm.registry import Registry, RegistryError, SessionRow
 from ssm.settings import ConfigError, Settings
 from ssm.vpath import VolumeMap, VPathError
 from ssm.web.security import DOWNLOAD_CSP, SecurityMiddleware
@@ -82,11 +83,14 @@ class UserCreate(Body):
     username: str
     password: str
     display_name: str = ""
+    email: str = ""
 
 
 class UserUpdate(Body):
     password: str | None = None
     display_name: str | None = None
+    remote_access: bool | None = None
+    email: str | None = None
 
 
 class MkdirBody(Body):
@@ -138,6 +142,10 @@ def create_app(
 
     data = Path(settings.data_dir) / "app"
     registry = Registry(data / "registry.db")
+    registry.on_change = AclExporter(
+        registry, settings.dav_bridge_dir, volumes, gid=settings.dav_bridge_gid
+    )
+    registry.on_change()
     cred = AdminCredential(settings.admin_password, settings.admin_password_hash, data / "secret")
     sessions = SessionManager(registry, cred.fingerprint, clock)
     sessions.purge()
@@ -511,8 +519,10 @@ def create_app(
         except FileOpError as e:
             raise bad(str(e)) from e
 
+        f = os.fdopen(fd, "rb")  # closed when dropped, even if the stream never starts
+
         def stream() -> Iterator[bytes]:
-            with os.fdopen(fd, "rb") as f:
+            with f:
                 while chunk := f.read(1024 * 1024):
                     yield chunk
 
@@ -675,12 +685,16 @@ def create_app(
     async def users_list(s: SessionRow = Depends(require_read)) -> dict[str, Any]:
         shares = registry.list_shares()
         out = []
+        flags = registry.user_flags()
+        emails = registry.user_emails()
         for name, display, created in registry.user_details():
             out.append(
                 {
                     "username": name,
                     "display_name": display or name,
                     "created_at": created or None,
+                    "remote_access": flags.get(name, (0, False))[1],
+                    "email": emails.get(name, ""),
                     "shares": [
                         {"id": x.name, "name": x.name, "access": x.members[name]}
                         for x in shares
@@ -699,6 +713,21 @@ def create_app(
             raise bad("display name must be at most 64 characters")
         return name
 
+    def check_email(email: str) -> str:
+        if not email.strip():
+            return ""
+        try:
+            return v.validate_email(email)
+        except v.ValidationError as e:
+            raise bad(f"e-mail: {e}") from e
+
+    def save_email(username: str, email: str) -> None:
+        try:
+            registry.set_email(username, email)
+        except RegistryError as e:
+            raise bad(str(e), 409) from e
+        audit.event("user_email", user=username, linked=bool(email))
+
     @app.post("/api/users", status_code=201)
     async def user_create(body: UserCreate, s: SessionRow = Depends(require_write)) -> Any:
         try:
@@ -707,8 +736,11 @@ def create_app(
         except v.ValidationError as e:
             raise bad(str(e)) from e
         display = check_display(body.display_name)
+        email = check_email(body.email)
         if registry.has_user(name):
             raise bad(f"user {name!r} already exists")
+        if email and email in registry.user_emails().values():
+            raise bad("that e-mail address is already linked to another user", 409)
         try:
             helper_.user_add(name)
             try:
@@ -720,6 +752,8 @@ def create_app(
             raise bad(str(e), 502) from e
         registry.add_user(name, clock(), display)
         audit.event("user_created", user=name)
+        if email:
+            save_email(name, email)
         return {
             "username": name,
             "display_name": display or name,
@@ -735,11 +769,21 @@ def create_app(
             raise bad("no such user", 404)
         if body.display_name is not None:
             registry.set_display_name(username, check_display(body.display_name))
+        if body.email is not None:
+            save_email(username, check_email(body.email))
+        if body.remote_access is not None:
+            registry.set_remote_access(username, body.remote_access)
+            audit.event("user_remote_access", user=username, enabled=body.remote_access)
         if body.password:
             try:
-                helper_.user_set_password(username, v.validate_password(body.password))
+                pw = v.validate_password(body.password)
             except v.ValidationError as e:
                 raise bad(str(e)) from e
+            # Invalidate cached WebDAV credentials before the password changes, so a
+            # failure below can only force an extra check, never keep the old password.
+            registry.bump_cred(username)
+            try:
+                helper_.user_set_password(username, pw)
             except HelperError as e:
                 raise bad(str(e), 502) from e
             audit.event("user_password_set", user=username)
@@ -757,6 +801,17 @@ def create_app(
                 "or unshare it first; a share nobody can reach is not allowed.",
                 409,
             )
+        # Cut off WebDAV first; restored below if the deletion fails.
+        was_remote = registry.user_flags().get(username, (0, False))[1]
+        registry.set_remote_access(username, False)
+        try:
+            return delete_user_now(username)
+        except BaseException:
+            if was_remote and registry.has_user(username):
+                registry.set_remote_access(username, True)
+            raise
+
+    def delete_user_now(username: str) -> dict[str, Any]:
         shares = registry.list_shares()
         affected = [x.name for x in shares if username in x.members]
         apply(

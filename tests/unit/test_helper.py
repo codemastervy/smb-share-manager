@@ -3,6 +3,7 @@ binaries that record their argv and stdin."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -56,10 +57,21 @@ if name == "testparm":
     print("\n".join(out))
 elif name == "pdbedit":
     users = [u for u in open(os.path.join(d, "pdb_users")).read().split() if u]
-    if "-Lw" in sys.argv or ("-L" in sys.argv and "-w" in sys.argv):
+    only = [a.split("=", 1)[1] for a in sys.argv if a.startswith("--user=")]
+    if only:
+        users = [u for u in users if u in only]
+        if not users:
+            sys.stderr.write("Username not found!\n")
+            sys.exit(255)
+    if "-Lw" in sys.argv or "-w" in sys.argv:
         for i, u in enumerate(users):
             lm, nt = "X" * 32, "8846F7EAEE8FB117AD06BDD830B7586C"
-            print(f"{u}:{3000+i}:{lm}:{nt}:[U          ]:LCT-00000000:")
+            flags = "[U          ]"
+            if os.path.exists(os.path.join(d, "pdb_nt_" + u)):
+                nt = open(os.path.join(d, "pdb_nt_" + u)).read().strip()
+            if os.path.exists(os.path.join(d, "pdb_flags_" + u)):
+                flags = open(os.path.join(d, "pdb_flags_" + u)).read().strip()
+            print(f"{u}:{3000+i}:{lm}:{nt}:{flags}:LCT-00000000:")
     elif "-L" in sys.argv:
         for i, u in enumerate(users):
             print(f"{u}:{3000+i}:")
@@ -498,3 +510,165 @@ def test_server_never_logs_password(server: Any, capsys: pytest.CaptureFixture[s
     out = capsys.readouterr()
     assert "very secret pw 1" not in out.out + out.err
     assert "user_set_password" in out.out
+
+
+# --- verify-only operation and socket (WebDAV) -------------------------------------------
+
+from ssm.helper.md4 import nt_hash  # noqa: E402
+from ssm.helper.server import OPS, VERIFY_OPS  # noqa: E402
+from ssm.helper_client import VerifyClient  # noqa: E402
+
+
+def _pdb_user(fake: dict[str, Any], name: str, password: str, flags: str = "[U          ]") -> None:
+    fake["ops"].user_add(name)
+    users = (fake["dir"] / "pdb_users").read_text().split()
+    (fake["dir"] / "pdb_users").write_text(" ".join([*users, name]))
+    (fake["dir"] / f"pdb_nt_{name}").write_text(nt_hash(password))
+    (fake["dir"] / f"pdb_flags_{name}").write_text(flags)
+
+
+def test_verify_right_and_wrong_password(fake: dict[str, Any]) -> None:
+    _pdb_user(fake, "alice", "alice-secret-pw")
+    o = fake["ops"]
+    assert o.user_verify_password("alice", "alice-secret-pw") == {"ok": True}
+    assert o.user_verify_password("alice", "alice-secret-pX") == {"ok": False}
+    assert o.user_verify_password("alice", "ALICE-SECRET-PW") == {"ok": False}
+
+
+def test_verify_accepts_short_imported_passwords(fake: dict[str, Any]) -> None:
+    # Imported CasaOS passwords may be shorter than today's minimum; verify must still work.
+    _pdb_user(fake, "bob", "short")
+    assert fake["ops"].user_verify_password("bob", "short") == {"ok": True}
+
+
+def test_verify_unknown_and_invalid_users(fake: dict[str, Any]) -> None:
+    o = fake["ops"]
+    assert o.user_verify_password("nobody1", "whatever-pw") == {"ok": False}
+    for bad in ("Root", "../x", "a b", "", "x" * 40, "root"):
+        assert o.user_verify_password(bad, "whatever-pw") == {"ok": False}
+    # Unknown or invalid names never reach pdbedit.
+    assert not [c for c in calls(fake) if c["bin"] == "pdbedit"]
+
+
+def test_verify_disabled_account_refused(fake: dict[str, Any]) -> None:
+    _pdb_user(fake, "carol", "carol-secret-pw", flags="[DU         ]")
+    assert fake["ops"].user_verify_password("carol", "carol-secret-pw") == {"ok": False}
+
+
+def test_verify_bad_hash_field_refused(fake: dict[str, Any]) -> None:
+    _pdb_user(fake, "dave", "dave-secret-pw")
+    (fake["dir"] / "pdb_nt_dave").write_text("NO PASSWORD XXXXXXXXXXXXXXXXXXXXX")
+    assert fake["ops"].user_verify_password("dave", "dave-secret-pw") == {"ok": False}
+
+
+@pytest.mark.parametrize("pw", ["", "a\nb", "a\x00b", "x" * 257, 5, None])
+def test_verify_bad_passwords_refused(fake: dict[str, Any], pw: Any) -> None:
+    _pdb_user(fake, "alice", "alice-secret-pw")
+    assert fake["ops"].user_verify_password("alice", pw) == {"ok": False}
+
+
+def test_verify_uses_argv_with_validated_name(fake: dict[str, Any]) -> None:
+    _pdb_user(fake, "alice", "alice-secret-pw")
+    fake["ops"].user_verify_password("alice", "alice-secret-pw")
+    pd = [c for c in calls(fake) if c["bin"] == "pdbedit"]
+    assert pd[-1]["argv"] == ["-w", "--user=alice"]
+
+
+def test_verify_op_only_on_verify_table() -> None:
+    assert "user_verify_password" not in OPS
+    assert set(VERIFY_OPS) == {"user_verify_password"}
+
+
+@pytest.fixture
+def verify_server(fake: dict[str, Any]) -> Any:
+    sock_path = Path(tempfile.mkdtemp(dir="/tmp")) / "v.sock"
+    srv = HelperServer(
+        fake["ops"],
+        str(sock_path),
+        allowed_uid=os.getuid(),
+        sock_gid=os.getgid(),
+        ops_table=VERIFY_OPS,
+        max_message=4096,
+        allow_root=False,
+    )
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    yield str(sock_path), srv
+    srv.shutdown()
+
+
+def test_verify_socket_roundtrip(verify_server: Any, fake: dict[str, Any]) -> None:
+    _pdb_user(fake, "alice", "alice-secret-pw")
+    c = VerifyClient(verify_server[0])
+    assert c.verify("alice", "alice-secret-pw") is True
+    assert c.verify("alice", "wrong-password") is False
+
+
+def test_verify_socket_refuses_every_other_op(verify_server: Any) -> None:
+    c = HelperClient(verify_server[0])
+    for op, args in [
+        ("user_add", {"name": "eve"}),
+        ("apply_shares", {"shares": []}),
+        ("user_set_password", {"name": "eve", "password": "x" * 12}),
+        ("status", {}),
+    ]:
+        with pytest.raises(HelperError, match="unknown operation"):
+            c.call(op, **args)
+
+
+def test_admin_socket_refuses_verify_op(server: Any) -> None:
+    with pytest.raises(HelperError, match="unknown operation"):
+        HelperClient(server[0]).call("user_verify_password", name="alice", password="x")
+
+
+def test_verify_socket_message_limit(verify_server: Any) -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect(verify_server[0])
+        payload = json.dumps(
+            {"op": "user_verify_password", "args": {"name": "alice", "password": "x" * 5000}}
+        ).encode()
+        with contextlib.suppress(OSError):
+            s.sendall(payload + b"\n")
+        reply = json.loads(s.recv(65536))
+    assert reply == {"ok": False, "error": "request too large"}
+
+
+def test_verify_socket_rejects_other_uids_and_root_option(fake: dict[str, Any]) -> None:
+    sock_path = Path(tempfile.mkdtemp(dir="/tmp")) / "v2.sock"
+    srv = HelperServer(
+        fake["ops"],
+        str(sock_path),
+        allowed_uid=os.getuid() + 4242,
+        sock_gid=os.getgid(),
+        ops_table=VERIFY_OPS,
+        allow_root=False,
+    )
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        assert VerifyClient(str(sock_path)).verify("alice", "x") is False
+    except HelperError as e:
+        assert "not allowed" in str(e)
+    finally:
+        srv.shutdown()
+
+
+def test_verify_never_logs_password(
+    verify_server: Any, fake: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    _pdb_user(fake, "alice", "alice-secret-pw")
+    VerifyClient(verify_server[0]).verify("alice", "alice-secret-pw")
+    VerifyClient(verify_server[0]).verify("alice", "guess-secret-pw")
+    out = capsys.readouterr()
+    assert "secret-pw" not in out.out + out.err
+    assert nt_hash("alice-secret-pw") not in out.out + out.err
+    assert "user_verify_password" in out.out
+
+
+def test_verify_server_refuses_unsafe_uid(fake: dict[str, Any]) -> None:
+    from ssm.helper.server import verify_uid_ok
+
+    assert verify_uid_ok(2999, puid=1000)
+    assert not verify_uid_ok(0, puid=1000)
+    assert not verify_uid_ok(1000, puid=1000)
+    assert not verify_uid_ok(-1, puid=1000)

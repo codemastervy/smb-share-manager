@@ -137,12 +137,33 @@ jobs:
           enable-cache: false
       - run: |
           sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30
-          sudo apt-get install -y -qq smbclient exfatprogs
+          sudo apt-get install -y -qq smbclient exfatprogs litmus rclone
           sudo modprobe exfat || { sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" && sudo modprobe exfat; }
           uv sync --frozen
           uv run playwright install --with-deps chromium-headless-shell
       - name: Integration tests (${{ matrix.fs }})
         run: scripts/ci/integration.sh "$LOCAL_TAG" "${{ matrix.fs }}"
+
+  installer:
+    timeout-minutes: 20
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+      - run: docker load -i image.tar
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: remote-access.sh on an old-style install
+        run: scripts/ci/installer.sh "$LOCAL_TAG"
 
   trivy:
     timeout-minutes: 15

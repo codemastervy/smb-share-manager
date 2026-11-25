@@ -13,6 +13,14 @@
 #   SMB_USER    SMB user that is a member of SMB_SHARE
 #   SMB_PASSWORD
 #   MAX_AGE_DAYS  warn if the image is older than this (default 14)
+#
+# WebDAV checks (only when the smb-dav container exists):
+#   DAV_CONTAINER  default smb-dav
+#   DAV_LOCAL_URL  the published port (default http://127.0.0.1:${DAV_PORT:-8094}); plain
+#                  HTTP from here must be refused before any password is read
+#   DAV_URL        optional, e.g. https://dav.example.org: log in as SMB_USER (who needs
+#                  "Remote access") and check that DAV_SHARE is listed
+#   DAV_SHARE      share expected in the WebDAV listing (default SMB_SHARE)
 
 set -u
 CONTAINER="${CONTAINER:-smb-share-manager}"
@@ -98,6 +106,121 @@ if [[ -n "${SMB_SHARE:-}" && -n "${SMB_USER:-}" ]]; then
   fi
 else
   warn "SMB login check skipped (set SMB_SHARE and SMB_USER)"
+fi
+
+# 8. WebDAV service (optional).
+DAV_CONTAINER="${DAV_CONTAINER:-smb-dav}"
+DAV_LOCAL_URL="${DAV_LOCAL_URL:-http://127.0.0.1:${DAV_PORT:-8094}}"
+dav_state() { "${DOCKER[@]}" inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$DAV_CONTAINER" 2>/dev/null; }
+dstate=$(dav_state)
+# Right after an update smb-dav waits for the main container: give it a minute.
+for _ in $(seq 1 30); do [[ "$dstate" == "running starting" ]] || break; sleep 2; dstate=$(dav_state); done
+if [[ -z "$dstate" ]]; then
+  ok "WebDAV not enabled (no $DAV_CONTAINER container)"
+else
+  [[ "$dstate" == "running healthy" ]] && ok "container $DAV_CONTAINER is running and healthy" \
+    || fail "container $DAV_CONTAINER is '$dstate'"
+  hard=$("${DOCKER[@]}" inspect -f '{{.HostConfig.ReadonlyRootfs}}|{{.HostConfig.CapAdd}}|{{.HostConfig.CapDrop}}|{{.Config.User}}|{{.HostConfig.SecurityOpt}}' "$DAV_CONTAINER" 2>/dev/null)
+  IFS='|' read -r ro capadd capdrop duser secopt <<<"$hard"
+  if [[ "$ro" == true && ( "$capadd" == "[]" || "$capadd" == "<no value>" ) && "$capdrop" == *ALL* \
+        && -n "$duser" && "${duser%%:*}" != 0 && "${duser%%:*}" != root && "$secopt" == *no-new-privileges* ]]; then
+    ok "$DAV_CONTAINER: read-only, no capabilities, no-new-privileges, user $duser"
+  else
+    fail "$DAV_CONTAINER hardening: read_only=$ro cap_add=$capadd cap_drop=$capdrop user=$duser security_opt=$secopt"
+  fi
+  if "${DOCKER[@]}" exec "$DAV_CONTAINER" sh -c 'test -e /data || test -e /mnt/timenest || test -e /run/ssm' 2>/dev/null; then
+    fail "$DAV_CONTAINER can see /data, /mnt/timenest or the admin socket"
+  else
+    ok "$DAV_CONTAINER has no /data, /mnt/timenest or admin socket"
+  fi
+  if "${DOCKER[@]}" exec "$DAV_CONTAINER" sh -c 'env | grep -q "^ADMIN_PASSWORD"' 2>/dev/null; then
+    fail "$DAV_CONTAINER has ADMIN_PASSWORD in its environment"
+  else
+    ok "$DAV_CONTAINER does not get the admin password"
+  fi
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X OPTIONS "$DAV_LOCAL_URL/")
+  hdrs=$(curl -s -D - -o /dev/null --max-time 5 -X OPTIONS "$DAV_LOCAL_URL/" | tr -d '\r')
+  if [[ "$code" == 403 ]] && ! grep -qi '^www-authenticate' <<<"$hdrs"; then
+    ok "plain HTTP to $DAV_LOCAL_URL refused before any password is asked for"
+  elif [[ "$code" == 401 ]]; then
+    warn "plain HTTP to $DAV_LOCAL_URL asks for a password (DAV_ALLOW_HTTP=true? only for local testing)"
+  else
+    fail "unexpected answer $code from $DAV_LOCAL_URL"
+  fi
+  if grep -qiE '^server: .*[0-9]' <<<"$hdrs"; then
+    fail "WebDAV Server header shows a version"
+  fi
+  admin=$(curl -s --max-time 5 "$DAV_LOCAL_URL/api/auth/status")
+  if [[ "$admin" == *csrf* ]]; then
+    fail "the admin API answers on the WebDAV port"
+  else
+    ok "the admin API is not served on the WebDAV port"
+  fi
+  if [[ -n "${DAV_URL:-}" && -n "${SMB_USER:-}" ]]; then
+    if [[ -z "${SMB_PASSWORD:-}" ]]; then
+      read -r -s -p "SMB password for $SMB_USER: " SMB_PASSWORD; echo
+    fi
+    esc_pw=${SMB_PASSWORD//\\/\\\\}; esc_pw=${esc_pw//\"/\\\"}
+    share="${DAV_SHARE:-${SMB_SHARE:-}}"
+    # Credentials go to curl on stdin, never on the command line.
+    listing=$(printf 'user = "%s:%s"\n' "$SMB_USER" "$esc_pw" \
+      | curl -s -K - --max-time 15 -X PROPFIND -H 'Depth: 1' -w '\n%{http_code}' "$DAV_URL/")
+    lcode=${listing##*$'\n'}
+    if [[ "$lcode" == 207 && ( -z "$share" || "$listing" == *"/$share/"* ) ]]; then
+      ok "WebDAV: $SMB_USER can list $DAV_URL/${share:+ (sees $share)}"
+    else
+      fail "WebDAV: $SMB_USER listing $DAV_URL/ gave HTTP $lcode${share:+ or $share is missing} (is Remote access ticked for $SMB_USER?)"
+    fi
+    remote_admin=$(curl -s --max-time 10 "$DAV_URL/api/auth/status")
+    [[ "$remote_admin" == *csrf* ]] && fail "the admin API answers on $DAV_URL" \
+      || ok "the admin API is not reachable through $DAV_URL"
+  else
+    warn "WebDAV login check skipped (set DAV_URL and SMB_USER)"
+  fi
+fi
+
+# 9. Files portal (optional).
+PORTAL_CONTAINER="${PORTAL_CONTAINER:-smb-portal}"
+PORTAL_LOCAL_URL="${PORTAL_LOCAL_URL:-http://127.0.0.1:${PORTAL_PORT:-8096}}"
+portal_state() { "${DOCKER[@]}" inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$PORTAL_CONTAINER" 2>/dev/null; }
+pstate=$(portal_state)
+for _ in $(seq 1 30); do [[ "$pstate" == "running starting" ]] || break; sleep 2; pstate=$(portal_state); done
+if [[ -z "$pstate" ]]; then
+  ok "files portal not enabled (no $PORTAL_CONTAINER container)"
+else
+  [[ "$pstate" == "running healthy" ]] && ok "container $PORTAL_CONTAINER is running and healthy" \
+    || fail "container $PORTAL_CONTAINER is '$pstate'"
+  hard=$("${DOCKER[@]}" inspect -f '{{.HostConfig.ReadonlyRootfs}}|{{.HostConfig.CapAdd}}|{{.HostConfig.CapDrop}}|{{.Config.User}}|{{.HostConfig.SecurityOpt}}' "$PORTAL_CONTAINER" 2>/dev/null)
+  IFS='|' read -r ro capadd capdrop puser secopt <<<"$hard"
+  if [[ "$ro" == true && ( "$capadd" == "[]" || "$capadd" == "<no value>" ) && "$capdrop" == *ALL* \
+        && -n "$puser" && "${puser%%:*}" != 0 && "${puser%%:*}" != root && "$secopt" == *no-new-privileges* ]]; then
+    ok "$PORTAL_CONTAINER: read-only, no capabilities, no-new-privileges, user $puser"
+  else
+    fail "$PORTAL_CONTAINER hardening: read_only=$ro cap_add=$capadd cap_drop=$capdrop user=$puser security_opt=$secopt"
+  fi
+  if "${DOCKER[@]}" exec "$PORTAL_CONTAINER" sh -c 'test -e /data || test -e /mnt/timenest || test -e /run/ssm' 2>/dev/null; then
+    fail "$PORTAL_CONTAINER can see /data, /mnt/timenest or the admin socket"
+  else
+    ok "$PORTAL_CONTAINER has no /data, /mnt/timenest or admin socket"
+  fi
+  if "${DOCKER[@]}" exec "$PORTAL_CONTAINER" sh -c 'env | grep -q "^ADMIN_PASSWORD"' 2>/dev/null; then
+    fail "$PORTAL_CONTAINER has ADMIN_PASSWORD in its environment"
+  else
+    ok "$PORTAL_CONTAINER does not get the admin password"
+  fi
+  # From this host we are not the trusted proxy and don't send the secret: a forged
+  # identity must get nothing.
+  pcode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    -H 'X-Forwarded-Proto: https' -H 'Remote-Email: spoof@example.invalid' \
+    "$PORTAL_LOCAL_URL/api/portal/me")
+  [[ "$pcode" == 403 || "$pcode" == 400 ]] && ok "a forged identity sent straight to the portal is refused ($pcode)" \
+    || fail "a forged identity sent straight to $PORTAL_LOCAL_URL got HTTP $pcode"
+  verified=$("${DOCKER[@]}" exec "$PORTAL_CONTAINER" sh -c 'echo "$PORTAL_HEADER_VERIFIED"' 2>/dev/null || true)
+  if [[ "$verified" == true ]]; then
+    ok "portal is live (PORTAL_HEADER_VERIFIED=true)"
+  else
+    warn "portal is in setup mode: run scripts/portal-spoof-test.sh https://files.<domain>, then set PORTAL_HEADER_VERIFIED=true"
+  fi
 fi
 
 if (( failed )); then
