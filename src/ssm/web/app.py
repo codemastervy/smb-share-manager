@@ -519,8 +519,10 @@ def create_app(
         except FileOpError as e:
             raise bad(str(e)) from e
 
+        f = os.fdopen(fd, "rb")  # closed when dropped, even if the stream never starts
+
         def stream() -> Iterator[bytes]:
-            with os.fdopen(fd, "rb") as f:
+            with f:
                 while chunk := f.read(1024 * 1024):
                     yield chunk
 

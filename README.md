@@ -379,6 +379,34 @@ browsing, which macOS and current Windows don't use: connect with smb://<server>
 WebDAV access from outside
 --------------------------
 
+**Quick setup (WebDAV and the files portal together).** On the server, in the folder with
+docker-compose.yml and .env, after updating to this release:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/codemastervy/smb-share-manager/main/scripts/remote-access.sh
+curl -fsSLO https://raw.githubusercontent.com/codemastervy/smb-share-manager/main/scripts/portal-spoof-test.sh
+chmod +x remote-access.sh portal-spoof-test.sh
+./remote-access.sh setup
+```
+
+It does the steps below for you:
+- backs up .env;
+- lists your shares and asks which to offer;
+- finds their folders on the host;
+- picks up Traefik's network;
+- creates the proxy secret;
+- turns on Remote access and sets the sign-in e-mail for the people you choose;
+- writes compose.remote.yml (your docker-compose.yml is not touched; COMPOSE_FILE in .env
+  points at both);
+- starts both services and runs the smoke test;
+- prints the exact settings to enter in Pangolin.
+
+After setting up Pangolin and signing in once at the portal, `./remote-access.sh verify
+https://files.example.org` runs the spoof test and switches the portal on.
+`./remote-access.sh doctor` explains refused requests. Running setup again is safe.
+
+The manual steps follow, for reference.
+
 An optional second service in the same compose file (same image, container smb-dav, port
 8094) lets SMB users reach their shares from outside the house over WebDAV: iOS Files,
 macOS Finder, Windows, rclone, Cryptomator. They log in with their existing SMB username

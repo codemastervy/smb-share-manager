@@ -89,8 +89,11 @@ class PeerGate:
         self.settings = settings
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":  # no WebSockets here
+            await send({"type": "websocket.close", "code": 1008})
             return
         path = scope.get("path", "")
         if path == "/healthz":
@@ -250,6 +253,8 @@ def create_portal_app(settings: PortalSettings, store: AclStore) -> FastAPI:
         ):
             raise _err(400, "Bad path.")
         parts = vpath[1:].split("/")
+        if any(part.startswith(HIDDEN_PREFIXES) for part in parts):
+            raise _err(404, "Not found.")  # someone else's upload in progress
         got = ctx.snap.share_for(ctx.user, parts[0])
         if got is None:
             raise _err(404, "Not found.")
@@ -339,8 +344,12 @@ def create_portal_app(settings: PortalSettings, store: AclStore) -> FastAPI:
             raise file_error(e) from e
         audit.event("portal_download", user=ctx.user, path=t.real)
 
+        # A file object right away: if the client goes before the stream starts, it is
+        # still closed when dropped (a bare fd would leak).
+        f = os.fdopen(fd, "rb")
+
         def stream() -> Iterator[bytes]:
-            with os.fdopen(fd, "rb") as f:
+            with f:
                 while chunk := f.read(1024 * 1024):
                     yield chunk
 

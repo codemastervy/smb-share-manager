@@ -1,0 +1,58 @@
+# smb-share-manager. Configuration goes in .env (copy .env.example).
+# This file uses a published image only: your monthly update script runs
+# "docker compose pull" and "docker compose up -d" and never builds anything.
+# To roll back, replace ":latest" with a dated tag such as ":20261008".
+
+services:
+  smb-share-manager:
+    image: ghcr.io/codemastervy/smb-share-manager:latest
+    container_name: smb-share-manager
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # SMB. Override SMB_PORT_445 / SMB_PORT_139 (e.g. 1445 / 1139) to run beside
+      # another Samba server while testing.
+      - "${SMB_BIND_ADDR:-0.0.0.0}:${SMB_PORT_445:-445}:445"
+      - "${SMB_BIND_ADDR:-0.0.0.0}:${SMB_PORT_139:-139}:139"
+      # Web UI.
+      - "${BIND_ADDR:-0.0.0.0}:${WEB_PORT:-8095}:8095"
+    volumes:
+      - ./data:/data
+      # Only the folders you want to share. Same path inside and outside the container,
+      # and list them in VOLUMES in .env. Never mount /, /proc, /sys or /mnt/timenest.
+      - /mnt/files:/mnt/files
+      # One-time import from CasaOS (see README "Migrating from CasaOS"). Remove after use:
+      # it contains password hashes.
+      # - ./import:/import:ro
+    # Least privilege: everything dropped, then only what smbd and the root helper need.
+    #   CHOWN            helper sets the smbusers group on a share folder (only when you tick
+    #                    "fix permissions"); smbd applies "force group"
+    #   DAC_OVERRIDE     root processes reach the PUID-owned ./data/app and the share folders
+    #   FOWNER           helper chmods a share folder it does not own; smbd sets file times/modes
+    #   SETUID, SETGID   smbd switches to the connecting SMB user; entrypoint drops the web app
+    #                    to PUID/PGID
+    #   NET_BIND_SERVICE smbd listens on 445/139 inside the container
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run:mode=0755,size=16m
+      - /tmp:mode=1777,size=64m
+      - /var/cache/samba:size=16m
+      - /var/lib/samba:size=16m
+      - /var/log/samba:size=16m
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

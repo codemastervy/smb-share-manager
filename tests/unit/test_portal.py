@@ -525,3 +525,26 @@ def test_portal_refuses_dav_uid(p: Portal) -> None:
 
     with pytest.raises(StartupError, match="DAV_UID"):
         portal_checks(p.settings, p.store, uid=p.settings.dav_uid)
+
+
+def test_temp_files_not_addressable(p: Portal) -> None:
+    (p.vol / "Family" / ".ssm-upload-abc.part").write_bytes(b"partial")
+    assert p.get("/api/portal/download?path=/Family/.ssm-upload-abc.part").status_code == 404
+    r = p.post("/api/portal/delete", {"path": "/Family/.ssm-upload-abc.part"})
+    assert r.status_code == 404
+    assert (p.vol / "Family" / ".ssm-upload-abc.part").exists()
+
+
+def test_websocket_refused(p: Portal) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    with (
+        pytest.raises(WebSocketDisconnect),
+        p.client.websocket_connect("/api/portal/me", headers=p.headers()),
+    ):
+        pass
+
+
+def test_head_does_not_open_files(p: Portal) -> None:
+    r = p.client.head("/api/portal/download?path=/Family/list.txt", headers=p.headers())
+    assert r.status_code == 405

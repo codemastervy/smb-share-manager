@@ -52,3 +52,13 @@ def test_portal_uid_default_differs() -> None:
     s = services()
     assert s["smb-portal"]["user"] == "${PORTAL_UID:-2998}:3000"
     assert s["smb-dav"]["user"] == "${DAV_UID:-2999}:3000"
+
+
+def test_installer_services_match_compose() -> None:
+    """scripts/remote-access.sh carries the service definitions for installs whose
+    docker-compose.yml predates them; they must stay identical."""
+    text = (ROOT / "scripts" / "remote-access.sh").read_text()
+    block = text.split("# BEGIN SERVICES\n", 1)[1].split("# END SERVICES", 1)[0]
+    embedded = yaml.safe_load(block)
+    s = services()
+    assert embedded == {"smb-dav": s["smb-dav"], "smb-portal": s["smb-portal"]}
